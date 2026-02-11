@@ -1,5 +1,6 @@
 import Foundation
 import EventKit
+import CoreImage
 
 // MARK: - JSON Output Helpers
 
