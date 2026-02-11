@@ -5,7 +5,7 @@ set -euo pipefail
 # Stops the service and removes all installed files.
 
 HOME_DIR="$HOME"
-PLIST_NAME="com.miguel.calendar-mcp"
+PLIST_NAME="com.local.calendar-mcp"
 LAUNCH_AGENTS_DIR="$HOME_DIR/Library/LaunchAgents"
 
 echo "==> Calendar MCP Server Uninstaller"

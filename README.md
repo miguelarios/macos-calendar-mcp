@@ -137,7 +137,7 @@ All output is JSON. Errors go to stderr with a non-zero exit code.
 macos-calendar-mcp/
 ├── cal-tools.swift              # Swift CLI — all EventKit operations
 ├── calendar_mcp_server.py       # FastMCP server — MCP protocol layer
-├── com.miguel.calendar-mcp.plist # LaunchAgent template
+├── com.local.calendar-mcp.plist  # LaunchAgent template
 ├── install.sh                   # Compile, install, and start
 ├── uninstall.sh                 # Stop and remove everything
 └── README.md
@@ -149,7 +149,7 @@ After installation:
 ~/.local/bin/cal-tools                              # Compiled binary
 ~/.local/share/calendar-mcp/calendar_mcp_server.py  # Server script
 ~/.local/share/calendar-mcp/logs/                    # stdout/stderr logs
-~/Library/LaunchAgents/com.miguel.calendar-mcp.plist # LaunchAgent
+~/Library/LaunchAgents/com.local.calendar-mcp.plist  # LaunchAgent
 ```
 
 ## Uninstalling

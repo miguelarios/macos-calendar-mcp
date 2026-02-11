@@ -11,7 +11,7 @@ BIN_DIR="$HOME_DIR/.local/bin"
 DATA_DIR="$HOME_DIR/.local/share/calendar-mcp"
 LOG_DIR="$DATA_DIR/logs"
 LAUNCH_AGENTS_DIR="$HOME_DIR/Library/LaunchAgents"
-PLIST_NAME="com.miguel.calendar-mcp"
+PLIST_NAME="com.local.calendar-mcp"
 
 echo "==> Calendar MCP Server Installer"
 echo ""
