@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.local.calendar-mcp</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>HOMEDIR/.local/share/calendar-mcp/calendar_mcp_server.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>HOMEDIR/.local/share/calendar-mcp/logs/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>HOMEDIR/.local/share/calendar-mcp/logs/stderr.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CAL_TOOLS_PATH</key>
+        <string>HOMEDIR/.local/bin/cal-tools</string>
+        <key>CALENDAR_MCP_PORT</key>
+        <string>9876</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>HOMEDIR/.local/share/calendar-mcp</string>
+</dict>
+</plist>
