@@ -4,6 +4,10 @@ import CoreImage
 
 // MARK: - JSON Output Helpers
 
+func nullable(_ value: Any?) -> Any {
+    return value ?? NSNull()
+}
+
 func jsonString(_ value: Any) throws -> String {
     let data = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys])
     return String(data: data, encoding: .utf8)!
@@ -26,7 +30,7 @@ func exitError(_ message: String) -> Never {
     exit(1)
 }
 
-// MARK: - Date Parsing
+// MARK: - Date Formatting
 
 let isoFormatter: ISO8601DateFormatter = {
     let f = ISO8601DateFormatter()
@@ -56,16 +60,27 @@ let outputFormatter: DateFormatter = {
     return f
 }()
 
+let utcFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.timeZone = TimeZone(identifier: "UTC")
+    return f
+}()
+
+let humanDateFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateStyle = .long
+    f.timeStyle = .short
+    return f
+}()
+
 func parseDate(_ string: String) -> Date? {
-    // Try full ISO 8601 with timezone first
     if let d = isoFormatter.date(from: string) { return d }
-    // Try ISO 8601 without timezone (assume local)
-    // Append local timezone offset for parsing
-    if string.count == 19 { // "2026-02-15T10:00:00"
+    if string.count == 19 {
         let withZ = string + TimeZone.current.iso8601Offset()
         if let d = isoFormatter.date(from: withZ) { return d }
     }
-    // Try date-only format
     if let d = dateOnlyFormatter.date(from: string) { return d }
     return nil
 }
@@ -80,6 +95,11 @@ extension TimeZone {
     }
 }
 
+func formatDate(_ date: Date?) -> Any {
+    guard let date = date else { return NSNull() }
+    return outputFormatter.string(from: date)
+}
+
 func startOfDay(_ date: Date) -> Date {
     return Calendar.current.startOfDay(for: date)
 }
@@ -91,106 +111,578 @@ func endOfDay(_ date: Date) -> Date {
     return Calendar.current.date(byAdding: comps, to: startOfDay(date))!
 }
 
+// MARK: - Color Helpers
+
+func hexColor(_ cgColor: CGColor?) -> Any {
+    guard let color = cgColor else { return NSNull() }
+    let ciColor = CIColor(cgColor: color)
+    let r = Int(ciColor.red * 255)
+    let g = Int(ciColor.green * 255)
+    let b = Int(ciColor.blue * 255)
+    return String(format: "#%02X%02X%02X", r, g, b)
+}
+
+// MARK: - Virtual Conference Helpers
+
+func isConferenceUrl(_ string: String) -> Bool {
+    let patterns = [
+        "zoom.us/j/", "zoom.us/my/",
+        "meet.google.com/",
+        "teams.microsoft.com/l/meetup-join",
+        "facetime.apple.com/",
+        "webex.com/meet/", "webex.com/join/",
+        "gotomeeting.com/join/",
+        "chime.aws/"
+    ]
+    let lower = string.lowercased()
+    return patterns.contains { lower.contains($0) }
+}
+
+func detectProvider(_ url: String) -> String {
+    let lower = url.lowercased()
+    if lower.contains("zoom.us") { return "Zoom" }
+    if lower.contains("meet.google.com") { return "Google Meet" }
+    if lower.contains("teams.microsoft.com") { return "Microsoft Teams" }
+    if lower.contains("facetime.apple.com") { return "FaceTime" }
+    if lower.contains("webex.com") { return "Webex" }
+    if lower.contains("gotomeeting.com") { return "GoToMeeting" }
+    if lower.contains("chime.aws") { return "Amazon Chime" }
+    return "Virtual Meeting"
+}
+
+func extractConferenceDetails(_ notes: String) -> String? {
+    let keywords = ["meeting id", "passcode", "password", "dial", "pin", "phone", "call-in", "join by"]
+    let lines = notes.components(separatedBy: .newlines)
+    let relevant = lines.filter { line in
+        let lower = line.lowercased().trimmingCharacters(in: .whitespaces)
+        return !lower.isEmpty && keywords.contains { lower.contains($0) }
+    }
+    return relevant.isEmpty ? nil : relevant.joined(separator: "\n")
+}
+
+func buildVirtualConference(_ event: EKEvent) -> Any {
+    var conferenceUrl: String? = nil
+    var conferenceName: String? = nil
+
+    if let url = event.url?.absoluteString, isConferenceUrl(url) {
+        conferenceUrl = url
+        conferenceName = detectProvider(url)
+    }
+
+    if conferenceUrl == nil, let loc = event.location, isConferenceUrl(loc) {
+        conferenceUrl = loc
+        conferenceName = detectProvider(loc)
+    }
+
+    guard let url = conferenceUrl else { return NSNull() }
+
+    var dict: [String: Any] = [
+        "url": url,
+        "name": conferenceName ?? "Virtual Meeting",
+        "details": NSNull()
+    ]
+
+    if let notes = event.notes, let details = extractConferenceDetails(notes) {
+        dict["details"] = details
+    }
+
+    return dict
+}
+
+// MARK: - Participant Helpers
+
+func mapParticipantStatus(_ status: EKParticipantStatus) -> String {
+    switch status {
+    case .unknown:    return "unknown"
+    case .pending:    return "pending"
+    case .accepted:   return "accepted"
+    case .declined:   return "declined"
+    case .tentative:  return "tentative"
+    case .delegated:  return "delegated"
+    case .completed:  return "completed"
+    case .inProcess:  return "inProcess"
+    @unknown default: return "unknown"
+    }
+}
+
+func mapParticipantRole(_ role: EKParticipantRole) -> String {
+    switch role {
+    case .unknown:        return "unknown"
+    case .required:       return "required"
+    case .optional:       return "optional"
+    case .chair:          return "chair"
+    case .nonParticipant: return "nonParticipant"
+    @unknown default:     return "unknown"
+    }
+}
+
+func mapParticipantType(_ type: EKParticipantType) -> String {
+    switch type {
+    case .unknown:  return "unknown"
+    case .person:   return "person"
+    case .room:     return "room"
+    case .resource: return "resource"
+    case .group:    return "group"
+    @unknown default: return "unknown"
+    }
+}
+
+func serializeParticipants(_ event: EKEvent) -> [[String: Any]] {
+    guard let attendees = event.attendees else { return [] }
+    return attendees.map { attendee in
+        [
+            "name": nullable(attendee.name),
+            "email": attendee.url.absoluteString
+                .replacingOccurrences(of: "mailto:", with: ""),
+            "status": mapParticipantStatus(attendee.participantStatus),
+            "role": mapParticipantRole(attendee.participantRole),
+            "type": mapParticipantType(attendee.participantType),
+            "isCurrentUser": attendee.isCurrentUser
+        ] as [String: Any]
+    }
+}
+
+func serializeOrganizer(_ event: EKEvent) -> Any {
+    guard let organizer = event.organizer else { return NSNull() }
+    return [
+        "name": nullable(organizer.name),
+        "email": organizer.url.absoluteString
+            .replacingOccurrences(of: "mailto:", with: ""),
+        "isCurrentUser": organizer.isCurrentUser
+    ] as [String: Any]
+}
+
+// MARK: - Alarm Helpers
+
+func humanReadableOffset(_ seconds: TimeInterval) -> String {
+    let absSeconds = abs(Int(seconds))
+    let direction = seconds < 0 ? "before" : "after"
+
+    if absSeconds == 0 { return "At time of event" }
+
+    let days = absSeconds / 86400
+    let hours = (absSeconds % 86400) / 3600
+    let minutes = (absSeconds % 3600) / 60
+
+    var parts: [String] = []
+    if days > 0 { parts.append("\(days) day\(days == 1 ? "" : "s")") }
+    if hours > 0 { parts.append("\(hours) hour\(hours == 1 ? "" : "s")") }
+    if minutes > 0 { parts.append("\(minutes) minute\(minutes == 1 ? "" : "s")") }
+
+    if parts.isEmpty { parts.append("\(absSeconds) second\(absSeconds == 1 ? "" : "s")") }
+
+    return "\(parts.joined(separator: ", ")) \(direction)"
+}
+
+func serializeAlarms(_ event: EKEvent) -> [[String: Any]] {
+    guard let alarms = event.alarms else { return [] }
+    var result: [[String: Any]] = []
+
+    for alarm in alarms {
+        var dict: [String: Any] = [:]
+
+        // Location-based alarm
+        if let loc = alarm.structuredLocation, loc.title != nil {
+            dict["type"] = "location"
+            dict["location"] = loc.title ?? "Unknown"
+            dict["trigger"] = alarm.proximity == .enter ? "arrive" : "depart"
+            dict["triggerHuman"] = alarm.proximity == .enter
+                ? "When arriving at \(loc.title ?? "location")"
+                : "When leaving \(loc.title ?? "location")"
+        } else if let absoluteDate = alarm.absoluteDate {
+            dict["type"] = "absolute"
+            dict["trigger"] = outputFormatter.string(from: absoluteDate)
+            dict["triggerHuman"] = humanDateFormatter.string(from: absoluteDate)
+        } else {
+            let offset = alarm.relativeOffset
+            dict["type"] = "relative"
+            dict["trigger"] = Int(offset)
+            dict["triggerHuman"] = humanReadableOffset(offset)
+        }
+
+        result.append(dict)
+    }
+
+    return result
+}
+
+// MARK: - Recurrence Helpers
+
+func mapFrequency(_ freq: EKRecurrenceFrequency) -> String {
+    switch freq {
+    case .daily:   return "daily"
+    case .weekly:  return "weekly"
+    case .monthly: return "monthly"
+    case .yearly:  return "yearly"
+    @unknown default: return "unknown"
+    }
+}
+
+func mapDayOfWeek(_ day: EKWeekday) -> String {
+    switch day {
+    case .sunday:    return "sunday"
+    case .monday:    return "monday"
+    case .tuesday:   return "tuesday"
+    case .wednesday: return "wednesday"
+    case .thursday:  return "thursday"
+    case .friday:    return "friday"
+    case .saturday:  return "saturday"
+    @unknown default: return "unknown"
+    }
+}
+
+let rruleDayMap: [EKWeekday: String] = [
+    .sunday: "SU", .monday: "MO", .tuesday: "TU",
+    .wednesday: "WE", .thursday: "TH", .friday: "FR", .saturday: "SA"
+]
+
+func buildRRuleString(_ rule: EKRecurrenceRule) -> String {
+    var parts: [String] = []
+
+    let freq: String
+    switch rule.frequency {
+    case .daily:   freq = "DAILY"
+    case .weekly:  freq = "WEEKLY"
+    case .monthly: freq = "MONTHLY"
+    case .yearly:  freq = "YEARLY"
+    @unknown default: freq = "DAILY"
+    }
+    parts.append("FREQ=\(freq)")
+
+    if rule.interval > 1 {
+        parts.append("INTERVAL=\(rule.interval)")
+    }
+
+    if let days = rule.daysOfTheWeek {
+        let dayStrings = days.map { day -> String in
+            let abbr = rruleDayMap[day.dayOfTheWeek] ?? "MO"
+            if day.weekNumber != 0 {
+                return "\(day.weekNumber)\(abbr)"
+            }
+            return abbr
+        }
+        parts.append("BYDAY=\(dayStrings.joined(separator: ","))")
+    }
+
+    if let daysOfMonth = rule.daysOfTheMonth {
+        parts.append("BYMONTHDAY=\(daysOfMonth.map { "\($0)" }.joined(separator: ","))")
+    }
+
+    if let months = rule.monthsOfTheYear {
+        parts.append("BYMONTH=\(months.map { "\($0)" }.joined(separator: ","))")
+    }
+
+    if let weeks = rule.weeksOfTheYear {
+        parts.append("BYWEEKNO=\(weeks.map { "\($0)" }.joined(separator: ","))")
+    }
+
+    if let positions = rule.setPositions {
+        parts.append("BYSETPOS=\(positions.map { "\($0)" }.joined(separator: ","))")
+    }
+
+    if let end = rule.recurrenceEnd {
+        if let endDate = end.endDate {
+            parts.append("UNTIL=\(utcFormatter.string(from: endDate))")
+        } else {
+            parts.append("COUNT=\(end.occurrenceCount)")
+        }
+    }
+
+    return parts.joined(separator: ";")
+}
+
+func buildHumanRecurrence(_ rule: EKRecurrenceRule) -> String {
+    var result = ""
+
+    let interval = rule.interval
+    switch rule.frequency {
+    case .daily:
+        result = interval == 1 ? "Every day" : "Every \(interval) days"
+    case .weekly:
+        result = interval == 1 ? "Every week" : "Every \(interval) weeks"
+    case .monthly:
+        result = interval == 1 ? "Every month" : "Every \(interval) months"
+    case .yearly:
+        result = interval == 1 ? "Every year" : "Every \(interval) years"
+    @unknown default:
+        result = "Repeating"
+    }
+
+    if let days = rule.daysOfTheWeek {
+        let dayNames = days.map { day -> String in
+            let name = mapDayOfWeek(day.dayOfTheWeek).prefix(3).capitalized
+            if day.weekNumber != 0 {
+                let ordinal: String
+                switch day.weekNumber {
+                case 1: ordinal = "1st"
+                case 2: ordinal = "2nd"
+                case 3: ordinal = "3rd"
+                case -1: ordinal = "last"
+                default: ordinal = "\(day.weekNumber)th"
+                }
+                return "\(ordinal) \(name)"
+            }
+            return name
+        }
+        result += " on \(dayNames.joined(separator: ", "))"
+    }
+
+    if let daysOfMonth = rule.daysOfTheMonth, !daysOfMonth.isEmpty {
+        let dayStrs = daysOfMonth.map { "\($0)" }
+        result += " on day \(dayStrs.joined(separator: ", "))"
+    }
+
+    if let months = rule.monthsOfTheYear, !months.isEmpty {
+        let monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        let names = months.compactMap { m -> String? in
+            let idx = m.intValue - 1
+            guard idx >= 0 && idx < 12 else { return nil }
+            return monthNames[idx]
+        }
+        result += " in \(names.joined(separator: ", "))"
+    }
+
+    if let end = rule.recurrenceEnd {
+        if let endDate = end.endDate {
+            let df = DateFormatter()
+            df.dateStyle = .long
+            df.timeStyle = .none
+            result += " until \(df.string(from: endDate))"
+        } else {
+            result += " for \(end.occurrenceCount) occurrences"
+        }
+    }
+
+    return result
+}
+
+func serializeRecurrence(_ event: EKEvent) -> Any {
+    guard let rules = event.recurrenceRules, let rule = rules.first else { return NSNull() }
+
+    var dict: [String: Any] = [
+        "frequency": mapFrequency(rule.frequency),
+        "interval": rule.interval
+    ]
+
+    if let days = rule.daysOfTheWeek {
+        dict["daysOfWeek"] = days.map { day in
+            [
+                "dayOfWeek": mapDayOfWeek(day.dayOfTheWeek),
+                "weekNumber": day.weekNumber
+            ] as [String: Any]
+        }
+    } else {
+        dict["daysOfWeek"] = NSNull()
+    }
+
+    if let daysOfMonth = rule.daysOfTheMonth {
+        dict["daysOfMonth"] = daysOfMonth.map { $0.intValue }
+    } else {
+        dict["daysOfMonth"] = NSNull()
+    }
+
+    if let months = rule.monthsOfTheYear {
+        dict["monthsOfYear"] = months.map { $0.intValue }
+    } else {
+        dict["monthsOfYear"] = NSNull()
+    }
+
+    if let weeks = rule.weeksOfTheYear {
+        dict["weeksOfYear"] = weeks.map { $0.intValue }
+    } else {
+        dict["weeksOfYear"] = NSNull()
+    }
+
+    if let positions = rule.setPositions {
+        dict["setPositions"] = positions.map { $0.intValue }
+    } else {
+        dict["setPositions"] = NSNull()
+    }
+
+    if let end = rule.recurrenceEnd {
+        if let endDate = end.endDate {
+            dict["end"] = [
+                "type": "date",
+                "date": dateOnlyFormatter.string(from: endDate),
+                "count": NSNull()
+            ] as [String: Any]
+        } else {
+            dict["end"] = [
+                "type": "count",
+                "date": NSNull(),
+                "count": end.occurrenceCount
+            ] as [String: Any]
+        }
+    } else {
+        dict["end"] = NSNull()
+    }
+
+    dict["rruleString"] = buildRRuleString(rule)
+    dict["human"] = buildHumanRecurrence(rule)
+
+    return dict
+}
+
+// MARK: - Location Helpers
+
+func serializeLocation(_ event: EKEvent) -> Any {
+    let structLoc = event.structuredLocation
+    let plainLoc = event.location
+
+    if structLoc == nil && (plainLoc == nil || plainLoc?.isEmpty == true) {
+        return NSNull()
+    }
+
+    var dict: [String: Any] = [
+        "name": nullable(structLoc?.title ?? plainLoc),
+        "latitude": NSNull(),
+        "longitude": NSNull(),
+        "radius": NSNull()
+    ]
+
+    if let geo = structLoc?.geoLocation?.coordinate {
+        dict["latitude"] = geo.latitude
+        dict["longitude"] = geo.longitude
+    }
+
+    if let radius = structLoc?.radius, radius > 0 {
+        dict["radius"] = radius
+    }
+
+    return dict
+}
+
+// MARK: - Event Status & Availability
+
+func mapEventStatus(_ status: EKEventStatus) -> String {
+    switch status {
+    case .none:      return "none"
+    case .confirmed: return "confirmed"
+    case .tentative: return "tentative"
+    case .canceled:  return "canceled"
+    @unknown default: return "unknown"
+    }
+}
+
+func mapAvailability(_ availability: EKEventAvailability) -> Any {
+    switch availability {
+    case .notSupported: return NSNull()
+    case .busy:         return "busy"
+    case .free:         return "free"
+    case .tentative:    return "tentative"
+    case .unavailable:  return "unavailable"
+    @unknown default:   return "unknown"
+    }
+}
+
 // MARK: - Event Serialization
 
-func serializeEvent(_ event: EKEvent) -> [String: Any] {
+enum DetailLevel: String {
+    case summary
+    case full
+}
+
+func serializeEvent(_ event: EKEvent, detail: DetailLevel = .full) -> [String: Any] {
+    if detail == .summary {
+        var dict: [String: Any] = [
+            "id": event.eventIdentifier ?? "",
+            "title": event.title ?? "(No Title)",
+            "start": outputFormatter.string(from: event.startDate),
+            "end": outputFormatter.string(from: event.endDate),
+            "allDay": event.isAllDay,
+            "status": mapEventStatus(event.status),
+            "calendar": event.calendar?.title ?? ""
+        ]
+        if let loc = event.structuredLocation?.title ?? event.location, !loc.isEmpty {
+            dict["location"] = loc
+        } else {
+            dict["location"] = NSNull()
+        }
+        return dict
+    }
+
+    // Full detail
     var dict: [String: Any] = [
         "id": event.eventIdentifier ?? "",
         "title": event.title ?? "(No Title)",
         "start": outputFormatter.string(from: event.startDate),
         "end": outputFormatter.string(from: event.endDate),
         "allDay": event.isAllDay,
-        "calendar": event.calendar?.title ?? "",
-        "location": event.location ?? "",
-        "notes": event.notes ?? "",
-        "url": event.url?.absoluteString ?? "",
+        "status": mapEventStatus(event.status)
     ]
 
-    // Attendees
-    var attendeeList: [String] = []
-    if let attendees = event.attendees {
-        for a in attendees {
-            if let email = a.url.absoluteString.replacingOccurrences(of: "mailto:", with: "")
-                .removingPercentEncoding {
-                attendeeList.append(email)
-            }
-        }
-    }
-    dict["attendees"] = attendeeList
-
-    // Recurrence rules
-    if let rules = event.recurrenceRules, !rules.isEmpty {
-        // Build a simplified RRULE-like string
-        var parts: [String] = []
-        for rule in rules {
-            var ruleStr = ""
-            switch rule.frequency {
-            case .daily: ruleStr = "FREQ=DAILY"
-            case .weekly: ruleStr = "FREQ=WEEKLY"
-            case .monthly: ruleStr = "FREQ=MONTHLY"
-            case .yearly: ruleStr = "FREQ=YEARLY"
-            @unknown default: ruleStr = "FREQ=UNKNOWN"
-            }
-            if rule.interval > 1 {
-                ruleStr += ";INTERVAL=\(rule.interval)"
-            }
-            parts.append(ruleStr)
-        }
-        dict["recurrenceRule"] = parts.joined(separator: " | ")
+    // Calendar as nested object
+    if let cal = event.calendar {
+        dict["calendar"] = [
+            "id": cal.calendarIdentifier,
+            "title": cal.title,
+            "color": hexColor(cal.cgColor)
+        ] as [String: Any]
     } else {
-        dict["recurrenceRule"] = ""
+        dict["calendar"] = NSNull()
     }
 
-    // Availability
-    switch event.availability {
-    case .busy: dict["availability"] = "busy"
-    case .free: dict["availability"] = "free"
-    case .tentative: dict["availability"] = "tentative"
-    case .unavailable: dict["availability"] = "unavailable"
-    case .notSupported: dict["availability"] = "notSupported"
-    @unknown default: dict["availability"] = "unknown"
-    }
+    dict["location"] = serializeLocation(event)
+    dict["url"] = nullable(event.url?.absoluteString)
+    dict["notes"] = nullable(event.notes)
+    dict["availability"] = mapAvailability(event.availability)
 
-    // Status
-    switch event.status {
-    case .none: dict["status"] = "none"
-    case .confirmed: dict["status"] = "confirmed"
-    case .tentative: dict["status"] = "tentative"
-    case .canceled: dict["status"] = "canceled"
-    @unknown default: dict["status"] = "unknown"
-    }
+    // Travel time — no clean public API, documented as best-effort
+    dict["travelTime"] = NSNull()
+
+    dict["virtualConference"] = buildVirtualConference(event)
+    dict["participants"] = serializeParticipants(event)
+    dict["organizer"] = serializeOrganizer(event)
+    dict["alarms"] = serializeAlarms(event)
+    dict["recurrence"] = serializeRecurrence(event)
+    dict["isDetached"] = event.isDetached
+    dict["occurrenceDate"] = outputFormatter.string(from: event.occurrenceDate)
+    dict["createdDate"] = formatDate(event.creationDate)
+    dict["lastModifiedDate"] = formatDate(event.lastModifiedDate)
 
     return dict
 }
 
+// MARK: - Calendar Serialization
+
+func mapCalendarType(_ type: EKCalendarType) -> String {
+    switch type {
+    case .local:        return "local"
+    case .calDAV:       return "calDAV"
+    case .exchange:     return "exchange"
+    case .subscription: return "subscription"
+    case .birthday:     return "birthday"
+    @unknown default:   return "unknown"
+    }
+}
+
+func mapSourceType(_ type: EKSourceType?) -> String {
+    guard let type = type else { return "unknown" }
+    switch type {
+    case .local:       return "local"
+    case .exchange:    return "exchange"
+    case .calDAV:      return "calDAV"
+    case .mobileMe:    return "mobileMe"
+    case .subscribed:  return "subscribed"
+    case .birthdays:   return "birthdays"
+    @unknown default:  return "unknown"
+    }
+}
+
 func serializeCalendar(_ cal: EKCalendar) -> [String: Any] {
-    var typeStr: String
-    switch cal.type {
-    case .local: typeStr = "local"
-    case .calDAV: typeStr = "calDAV"
-    case .exchange: typeStr = "exchange"
-    case .subscription: typeStr = "subscription"
-    case .birthday: typeStr = "birthday"
-    @unknown default: typeStr = "unknown"
-    }
-
-    let cgColor = cal.cgColor
-    var colorHex = ""
-    if let color = cgColor {
-        let ciColor = CIColor(cgColor: color)
-        let r = Int(ciColor.red * 255)
-        let g = Int(ciColor.green * 255)
-        let b = Int(ciColor.blue * 255)
-        colorHex = String(format: "#%02X%02X%02X", r, g, b)
-    }
-
     return [
         "id": cal.calendarIdentifier,
         "title": cal.title,
-        "type": typeStr,
-        "source": cal.source?.title ?? "",
-        "color": colorHex,
-        "immutable": cal.isImmutable,
+        "color": hexColor(cal.cgColor),
+        "type": mapCalendarType(cal.type),
+        "allowsModify": cal.allowsContentModifications,
+        "subscribed": cal.type == .subscription,
+        "source": [
+            "id": nullable(cal.source?.sourceIdentifier),
+            "title": nullable(cal.source?.title),
+            "type": mapSourceType(cal.source?.sourceType)
+        ] as [String: Any]
     ]
 }
 
@@ -200,7 +692,7 @@ class Args {
     let args: [String]
 
     init() {
-        self.args = Array(CommandLine.arguments.dropFirst()) // drop binary name
+        self.args = Array(CommandLine.arguments.dropFirst())
     }
 
     var subcommand: String? {
@@ -220,6 +712,13 @@ class Args {
             return nil
         }
         return rest[idx + 1]
+    }
+
+    var detailLevel: DetailLevel {
+        if let val = value("detail"), val == "summary" {
+            return .summary
+        }
+        return .full
     }
 }
 
@@ -267,9 +766,10 @@ func cmdEvents(store: EKEventStore, args: Args) {
         calendars = matched
     }
 
+    let detail = args.detailLevel
     let predicate = store.predicateForEvents(withStart: startDate, end: endDate, calendars: calendars)
     let events = store.events(matching: predicate).sorted { $0.startDate < $1.startDate }
-    let serialized = events.map { serializeEvent($0) }
+    let serialized = events.map { serializeEvent($0, detail: detail) }
     exitSuccess(["events": serialized])
 }
 
@@ -280,7 +780,8 @@ func cmdEvent(store: EKEventStore, args: Args) {
     guard let event = store.event(withIdentifier: eventId) else {
         exitError("Event not found with ID: \(eventId)")
     }
-    exitSuccess(["event": serializeEvent(event)])
+    // Single event lookup always returns full detail
+    exitSuccess(["event": serializeEvent(event, detail: .full)])
 }
 
 func cmdCreate(store: EKEventStore, args: Args) {
@@ -365,7 +866,6 @@ func cmdUpdate(store: EKEventStore, args: Args) {
         }
     }
 
-    // For recurring events: default to thisEvent, allow "future" for futureEvents
     var span: EKSpan = .thisEvent
     if let spanStr = args.value("span"), spanStr == "future" {
         span = .futureEvents
@@ -412,17 +912,16 @@ func cmdSearch(store: EKEventStore, args: Args) {
     if let fromStr = args.value("from"), let d = parseDate(fromStr) {
         fromDate = d
     } else {
-        // Default: 90 days ago
         fromDate = Calendar.current.date(byAdding: .day, value: -90, to: now)!
     }
 
     if let toStr = args.value("to"), let d = parseDate(toStr) {
         toDate = d
     } else {
-        // Default: 90 days ahead
         toDate = Calendar.current.date(byAdding: .day, value: 90, to: now)!
     }
 
+    let detail = args.detailLevel
     let predicate = store.predicateForEvents(withStart: fromDate, end: toDate, calendars: nil)
     let allEvents = store.events(matching: predicate)
     let lowerQuery = query.lowercased()
@@ -433,7 +932,7 @@ func cmdSearch(store: EKEventStore, args: Args) {
         return title.contains(lowerQuery) || notes.contains(lowerQuery) || location.contains(lowerQuery)
     }.sorted { $0.startDate < $1.startDate }
 
-    let serialized = matched.map { serializeEvent($0) }
+    let serialized = matched.map { serializeEvent($0, detail: detail) }
     exitSuccess(["events": serialized, "query": query, "count": serialized.count])
 }
 

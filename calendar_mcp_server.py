@@ -74,69 +74,96 @@ def run_cal_tools(*args: str) -> dict:
 
 @mcp.tool()
 def list_calendars() -> dict:
-    """List all available macOS calendars with their IDs, titles, types, and sources."""
+    """List all available macOS calendars with their IDs, titles, types, colors,
+    read/write status, and source account metadata (iCloud, Google, Exchange, etc.)."""
     return run_cal_tools("calendars")
 
 
 @mcp.tool()
-def get_events(from_date: str, to_date: str, calendar: str = "") -> dict:
+def get_events(
+    from_date: str, to_date: str, calendar: str = "", detail_level: str = "full"
+) -> dict:
     """Get calendar events in a date range.
 
     Args:
         from_date: Start date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).
         to_date: End date in ISO 8601 format.
         calendar: Optional calendar name to filter by.
+        detail_level: "summary" for lightweight output (id, title, start, end, allDay,
+                      calendar, location) or "full" (default) for complete detail
+                      including participants, alarms, recurrence, conference links, etc.
     """
     args = ["events", "--from", from_date, "--to", to_date]
     if calendar:
         args.extend(["--calendar", calendar])
+    if detail_level == "summary":
+        args.extend(["--detail", "summary"])
     return run_cal_tools(*args)
 
 
 @mcp.tool()
-def get_today_events(calendar: str = "") -> dict:
+def get_today_events(calendar: str = "", detail_level: str = "full") -> dict:
     """Get all events for today.
 
     Args:
         calendar: Optional calendar name to filter by.
+        detail_level: "summary" for lightweight output or "full" (default) for
+                      complete detail including participants, alarms, recurrence, etc.
     """
     args = ["events", "--today"]
     if calendar:
         args.extend(["--calendar", calendar])
+    if detail_level == "summary":
+        args.extend(["--detail", "summary"])
     return run_cal_tools(*args)
 
 
 @mcp.tool()
-def get_upcoming_events(days: int = 7, calendar: str = "") -> dict:
+def get_upcoming_events(
+    days: int = 7, calendar: str = "", detail_level: str = "full"
+) -> dict:
     """Get events for the next N days (including today).
 
     Args:
         days: Number of days to look ahead (default 7).
         calendar: Optional calendar name to filter by.
+        detail_level: "summary" for lightweight output or "full" (default) for
+                      complete detail including participants, alarms, recurrence, etc.
     """
     args = ["events", "--days", str(max(1, days))]
     if calendar:
         args.extend(["--calendar", calendar])
+    if detail_level == "summary":
+        args.extend(["--detail", "summary"])
     return run_cal_tools(*args)
 
 
 @mcp.tool()
-def get_past_events(days: int = 30, calendar: str = "") -> dict:
+def get_past_events(
+    days: int = 30, calendar: str = "", detail_level: str = "full"
+) -> dict:
     """Get events from the past N days (up to and including today).
 
     Args:
         days: Number of days to look back (default 30).
         calendar: Optional calendar name to filter by.
+        detail_level: "summary" for lightweight output or "full" (default) for
+                      complete detail including participants, alarms, recurrence, etc.
     """
     args = ["events", "--past-days", str(max(1, days))]
     if calendar:
         args.extend(["--calendar", calendar])
+    if detail_level == "summary":
+        args.extend(["--detail", "summary"])
     return run_cal_tools(*args)
 
 
 @mcp.tool()
 def search_events(
-    query: str, from_date: str = "", to_date: str = ""
+    query: str,
+    from_date: str = "",
+    to_date: str = "",
+    detail_level: str = "full",
 ) -> dict:
     """Search events by keyword in title, notes, or location.
 
@@ -144,18 +171,24 @@ def search_events(
         query: Search keyword.
         from_date: Optional start date (defaults to 90 days ago).
         to_date: Optional end date (defaults to 90 days ahead).
+        detail_level: "summary" for lightweight output or "full" (default) for
+                      complete detail including participants, alarms, recurrence, etc.
     """
     args = ["search", "--query", query]
     if from_date:
         args.extend(["--from", from_date])
     if to_date:
         args.extend(["--to", to_date])
+    if detail_level == "summary":
+        args.extend(["--detail", "summary"])
     return run_cal_tools(*args)
 
 
 @mcp.tool()
 def get_event(event_id: str) -> dict:
-    """Get a single event by its ID.
+    """Get a single event by its ID with full detail including participants,
+    organizer, alarms, recurrence rules, virtual conference links, location
+    with coordinates, availability, and timestamps.
 
     Args:
         event_id: The EventKit event identifier.
