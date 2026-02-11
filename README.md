@@ -8,12 +8,12 @@ macOS TCC (Transparency, Consent, and Control) prevents GUI-based coding agents 
 
 ## The Solution
 
-Run the calendar service as its own process — a macOS LaunchAgent with its own TCC context. Any MCP-compatible agent connects over `localhost:9876` via SSE. No per-agent patches needed.
+Run the calendar service as its own process — a macOS LaunchAgent with its own TCC context. Any MCP-compatible agent connects over `localhost:9876` via Streamable HTTP. No per-agent patches needed.
 
 ```
 Agent (Goose, Claude Code, etc.)
   │
-  │ SSE (localhost:9876)
+  │ Streamable HTTP (localhost:9876)
   ▼
 FastMCP Server (Python)
   │
@@ -49,8 +49,8 @@ Once running, add to your agent's MCP config:
 ```yaml
 extensions:
   calendar:
-    type: sse
-    uri: http://localhost:9876/sse
+    type: streamable_http
+    uri: http://localhost:9876/mcp
 ```
 
 **Claude Code** (MCP settings):
@@ -59,8 +59,8 @@ extensions:
 {
   "mcpServers": {
     "calendar": {
-      "type": "sse",
-      "url": "http://localhost:9876/sse"
+      "type": "streamable-http",
+      "url": "http://localhost:9876/mcp"
     }
   }
 }
@@ -129,7 +129,7 @@ All output is JSON. Errors go to stderr with a non-zero exit code.
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `CAL_TOOLS_PATH` | `~/.local/bin/cal-tools` | Path to the compiled Swift binary |
-| `CALENDAR_MCP_PORT` | `9876` | Port for the MCP SSE server |
+| `CALENDAR_MCP_PORT` | `9876` | Port for the MCP server |
 
 ## File Layout
 
@@ -159,6 +159,13 @@ After installation:
 ```
 
 Stops the service and removes all installed files. The `fastmcp` Python package is left in place (remove manually with `pip3 uninstall fastmcp` if desired).
+
+## macOS Permissions
+
+After installation, you'll see two entries in System Settings:
+
+- **General > Login Items & Extensions > Background Activity** — shows **`calendar-mcp-server`** (the LaunchAgent wrapper script).
+- **Privacy & Security > Calendars** — shows **`python3`** (e.g. `python3.14`). This is the Python binary from the virtual environment. macOS attributes calendar access to the parent process that spawns `cal-tools`, even though `cal-tools` (Swift) is the one using EventKit. Both entries are expected and required.
 
 ## Notes
 

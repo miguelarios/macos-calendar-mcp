@@ -1,7 +1,7 @@
 """
 Calendar MCP Server
 
-A FastMCP server that exposes macOS calendar operations via SSE/HTTP transport.
+A FastMCP server that exposes macOS calendar operations via Streamable HTTP transport.
 Delegates all EventKit work to the compiled `cal-tools` Swift binary.
 """
 
@@ -256,4 +256,4 @@ def delete_event(event_id: str, span: str = "this") -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="sse")
+    mcp.run(transport="http")

@@ -36,17 +36,16 @@ echo "  Installed: $BIN_DIR/cal-tools"
 # --- 3. Copy MCP server ---
 echo "[3/7] Installing MCP server..."
 cp "$SCRIPT_DIR/calendar_mcp_server.py" "$DATA_DIR/calendar_mcp_server.py"
+cp "$SCRIPT_DIR/calendar-mcp-server.sh" "$DATA_DIR/calendar-mcp-server"
+chmod +x "$DATA_DIR/calendar-mcp-server"
 echo "  Installed: $DATA_DIR/calendar_mcp_server.py"
 
-# --- 4. Install Python dependency ---
+# --- 4. Install Python dependency (in a virtual environment) ---
 echo "[4/7] Installing Python dependencies..."
-if command -v pip3 &>/dev/null; then
-    pip3 install --quiet fastmcp
-elif command -v pip &>/dev/null; then
-    pip install --quiet fastmcp
-else
-    echo "WARNING: pip not found. Install fastmcp manually: pip install fastmcp"
-fi
+VENV_DIR="$DATA_DIR/venv"
+python3 -m venv "$VENV_DIR"
+"$VENV_DIR/bin/pip" install --quiet fastmcp
+echo "  Installed fastmcp in venv: $VENV_DIR"
 
 # --- 5. Install LaunchAgent plist (expand HOMEDIR placeholder) ---
 echo "[5/7] Installing LaunchAgent..."
@@ -81,8 +80,8 @@ fi
 
 # Check if MCP server is responding
 sleep 2
-if curl -s --max-time 5 "http://127.0.0.1:9876/sse" >/dev/null 2>&1; then
-    echo "  MCP server: OK (http://127.0.0.1:9876/sse)"
+if curl -s --max-time 5 "http://127.0.0.1:9876/mcp" >/dev/null 2>&1; then
+    echo "  MCP server: OK (http://127.0.0.1:9876/mcp)"
 else
     echo "  MCP server: Not responding yet. Check logs at:"
     echo "    $LOG_DIR/stdout.log"
@@ -97,9 +96,9 @@ echo ""
 echo "  Goose (~/.config/goose/config.yaml):"
 echo "    extensions:"
 echo "      calendar:"
-echo "        type: sse"
-echo "        uri: http://localhost:9876/sse"
+echo "        type: streamable_http"
+echo "        uri: http://localhost:9876/mcp"
 echo ""
 echo "  Claude Code (MCP settings):"
-echo '    {"mcpServers": {"calendar": {"type": "sse", "url": "http://localhost:9876/sse"}}}'
+echo '    {"mcpServers": {"calendar": {"type": "streamable-http", "url": "http://localhost:9876/mcp"}}}'
 echo ""

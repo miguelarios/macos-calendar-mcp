@@ -7,8 +7,7 @@
     <string>com.local.calendar-mcp</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
-        <string>HOMEDIR/.local/share/calendar-mcp/calendar_mcp_server.py</string>
+        <string>HOMEDIR/.local/share/calendar-mcp/calendar-mcp-server</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
