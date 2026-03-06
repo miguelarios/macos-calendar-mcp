@@ -27,13 +27,29 @@ macOS Calendar database
 
 ## Quick Start
 
+### Homebrew (recommended)
+
+```bash
+brew install --HEAD miguelarios/tap/macos-calendar-mcp
+brew services start macos-calendar-mcp
+cal-tools calendars  # triggers macOS calendar permission prompt
+```
+
+Check status anytime:
+
+```bash
+macos-calendar-mcp status
+```
+
+### Manual Install
+
 ```bash
 git clone https://github.com/miguelarios/macos-calendar-mcp.git
 cd macos-calendar-mcp
 ./install.sh
 ```
 
-The installer will:
+The manual installer will:
 1. Compile the Swift CLI binary (`cal-tools`)
 2. Install the FastMCP server
 3. Set up a LaunchAgent (auto-starts on login, restarts on crash)
@@ -96,6 +112,7 @@ extensions:
 | `create_event` | Create a new event |
 | `update_event` | Update an existing event |
 | `delete_event` | Delete an event |
+| `find_free_slots` | Find available time slots across calendars |
 
 ## Using cal-tools Directly
 
@@ -136,6 +153,10 @@ cal-tools delete --id "EVENT_ID"
 
 # Delete this and all future occurrences of a recurring event
 cal-tools delete --id "EVENT_ID" --span future
+
+# Find free 30-minute slots
+cal-tools availability --from 2026-03-09 --to 2026-03-11 --duration 30 \
+  --preferred-start 08:00 --preferred-end 17:00
 ```
 
 All output is JSON. Errors go to stderr with a non-zero exit code.
@@ -170,11 +191,20 @@ After installation:
 
 ## Uninstalling
 
+**Homebrew:**
+
+```bash
+brew services stop macos-calendar-mcp
+brew uninstall macos-calendar-mcp
+```
+
+**Manual install:**
+
 ```bash
 ./uninstall.sh
 ```
 
-Stops the service and removes all installed files. The `fastmcp` Python package is left in place (remove manually with `pip3 uninstall fastmcp` if desired).
+Stops the service and removes all installed files.
 
 ## macOS Permissions
 
