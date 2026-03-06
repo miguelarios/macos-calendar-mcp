@@ -66,6 +66,22 @@ extensions:
 }
 ```
 
+**Claude Desktop** (MCP settings):
+
+```json
+{
+  "mcpServers": {
+    "calendar": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://localhost:9876/mcp"
+      ]
+    }
+  }
+}
+```
+
 ## Available Tools
 
 | Tool | Description |
