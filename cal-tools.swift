@@ -111,6 +111,16 @@ func endOfDay(_ date: Date) -> Date {
     return Calendar.current.date(byAdding: comps, to: startOfDay(date))!
 }
 
+func timeOfDay(_ string: String, on date: Date) -> Date? {
+    let parts = string.split(separator: ":").compactMap { Int($0) }
+    guard parts.count == 2 else { return nil }
+    var comps = Calendar.current.dateComponents([.year, .month, .day], from: date)
+    comps.hour = parts[0]
+    comps.minute = parts[1]
+    comps.second = 0
+    return Calendar.current.date(from: comps)
+}
+
 // MARK: - Color Helpers
 
 func hexColor(_ cgColor: CGColor?) -> Any {
@@ -936,6 +946,123 @@ func cmdSearch(store: EKEventStore, args: Args) {
     exitSuccess(["events": serialized, "query": query, "count": serialized.count])
 }
 
+func cmdAvailability(store: EKEventStore, args: Args) {
+    guard let fromStr = args.value("from"), let toStr = args.value("to") else {
+        exitError("Missing --from and --to parameters.")
+    }
+    guard let fromDate = parseDate(fromStr) else {
+        exitError("Invalid --from date: \(fromStr)")
+    }
+    guard let toDate = parseDate(toStr) else {
+        exitError("Invalid --to date: \(toStr)")
+    }
+    guard let durationStr = args.value("duration"), let duration = Int(durationStr), duration > 0 else {
+        exitError("Missing or invalid --duration parameter (positive integer minutes).")
+    }
+
+    let prefStart = args.value("preferred-start") ?? "08:00"
+    let prefEnd = args.value("preferred-end") ?? "17:00"
+    let includeAllDayAsBusy = args.flag("include-all-day-as-busy")
+    let ignoreTentative = args.flag("ignore-tentative")
+
+    // Parse excluded calendars (comma-separated)
+    var excludedNames: Set<String> = []
+    if let exc = args.value("exclude-calendars") {
+        for name in exc.split(separator: ",") {
+            excludedNames.insert(name.trimmingCharacters(in: .whitespaces).lowercased())
+        }
+    }
+
+    // Filter calendars
+    let allCalendars = store.calendars(for: .event)
+    let calendars: [EKCalendar]? = excludedNames.isEmpty ? nil : allCalendars.filter {
+        !excludedNames.contains($0.title.lowercased())
+    }
+
+    // Fetch events in the full range
+    let predicate = store.predicateForEvents(withStart: startOfDay(fromDate), end: endOfDay(toDate), calendars: calendars)
+    let allEvents = store.events(matching: predicate)
+
+    // Filter events by availability rules
+    let busyEvents = allEvents.filter { event in
+        // Skip all-day events unless explicitly included
+        if event.isAllDay && !includeAllDayAsBusy { return false }
+
+        switch event.availability {
+        case .free:
+            return false
+        case .tentative:
+            return !ignoreTentative
+        default:
+            return true  // busy, unavailable, notSupported (treat as busy)
+        }
+    }
+
+    // Build busy intervals merged per day
+    var slots: [[String: Any]] = []
+    var currentDay = startOfDay(fromDate)
+    let lastDay = startOfDay(toDate)
+
+    while currentDay <= lastDay {
+        guard let windowStart = timeOfDay(prefStart, on: currentDay),
+              let windowEnd = timeOfDay(prefEnd, on: currentDay) else {
+            exitError("Invalid preferred-start or preferred-end time format. Use HH:MM.")
+        }
+
+        if windowStart >= windowEnd {
+            exitError("preferred-start must be before preferred-end.")
+        }
+
+        // Collect busy intervals overlapping this day's window
+        var busyIntervals: [(start: Date, end: Date)] = []
+        for event in busyEvents {
+            let evStart = event.startDate!
+            let evEnd = event.endDate!
+            // Clip to window
+            let clippedStart = max(evStart, windowStart)
+            let clippedEnd = min(evEnd, windowEnd)
+            if clippedStart < clippedEnd {
+                busyIntervals.append((start: clippedStart, end: clippedEnd))
+            }
+        }
+
+        // Sort and merge overlapping intervals
+        busyIntervals.sort { $0.start < $1.start }
+        var merged: [(start: Date, end: Date)] = []
+        for interval in busyIntervals {
+            if let last = merged.last, interval.start <= last.end {
+                merged[merged.count - 1] = (start: last.start, end: max(last.end, interval.end))
+            } else {
+                merged.append(interval)
+            }
+        }
+
+        // Find free gaps
+        let durationSeconds = TimeInterval(duration * 60)
+        var cursor = windowStart
+        for busy in merged {
+            if busy.start.timeIntervalSince(cursor) >= durationSeconds {
+                slots.append([
+                    "start": outputFormatter.string(from: cursor),
+                    "end": outputFormatter.string(from: busy.start)
+                ])
+            }
+            cursor = max(cursor, busy.end)
+        }
+        // Check gap after last busy block
+        if windowEnd.timeIntervalSince(cursor) >= durationSeconds {
+            slots.append([
+                "start": outputFormatter.string(from: cursor),
+                "end": outputFormatter.string(from: windowEnd)
+            ])
+        }
+
+        currentDay = Calendar.current.date(byAdding: .day, value: 1, to: currentDay)!
+    }
+
+    exitSuccess(["slots": slots, "count": slots.count])
+}
+
 // MARK: - Main
 
 let store = EKEventStore()
@@ -943,7 +1070,7 @@ let semaphore = DispatchSemaphore(value: 0)
 let parsedArgs = Args()
 
 guard let subcommand = parsedArgs.subcommand else {
-    exitError("Usage: cal-tools <calendars|events|event|create|update|delete|search> [options]")
+    exitError("Usage: cal-tools <calendars|events|event|create|update|delete|search|availability> [options]")
 }
 
 let requestAccess: (@escaping (Bool, Error?) -> Void) -> Void = { completion in
@@ -977,8 +1104,10 @@ requestAccess { granted, error in
         cmdDelete(store: store, args: parsedArgs)
     case "search":
         cmdSearch(store: store, args: parsedArgs)
+    case "availability":
+        cmdAvailability(store: store, args: parsedArgs)
     default:
-        exitError("Unknown command: \(subcommand). Use: calendars, events, event, create, update, delete, search")
+        exitError("Unknown command: \(subcommand). Use: calendars, events, event, create, update, delete, search, availability")
     }
 }
 
