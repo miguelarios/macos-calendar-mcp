@@ -45,6 +45,12 @@ cal-tools events --today
 cal-tools events --days 7
 cal-tools search --query "standup"
 cal-tools create --title "Test" --start "2025-01-15T10:00:00" --end "2025-01-15T11:00:00"
+cal-tools availability --from 2026-03-09 --to 2026-03-11 --duration 30 --preferred-start 08:00 --preferred-end 17:00
+```
+
+### Check server status
+```bash
+macos-calendar-mcp status
 ```
 
 ## Installation Layout
