@@ -288,5 +288,43 @@ def delete_event(event_id: str, span: str = "this") -> dict:
     return run_cal_tools(*args)
 
 
+@mcp.tool()
+def find_free_slots(
+    start: str,
+    end: str,
+    duration: int,
+    preferred_start: str = "08:00",
+    preferred_end: str = "17:00",
+    exclude_calendars: list[str] | None = None,
+    include_all_day_as_busy: bool = False,
+    ignore_tentative: bool = False,
+) -> dict:
+    """Find available time slots across all macOS calendars.
+
+    Returns free slots as full-length gaps (not chunked). A 2-hour free block
+    returns as one slot; the agent can propose specific times within it.
+
+    Args:
+        start: Start date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).
+        end: End date in ISO 8601 format.
+        duration: Minimum slot duration in minutes.
+        preferred_start: Earliest time of day to consider (HH:MM, default "08:00").
+        preferred_end: Latest time of day to consider (HH:MM, default "17:00").
+        exclude_calendars: Calendar names to skip (e.g. ["Birthdays", "US Holidays"]).
+        include_all_day_as_busy: Treat all-day events as busy (default False).
+        ignore_tentative: Treat tentative events as free (default False).
+    """
+    args = ["availability", "--from", start, "--to", end, "--duration", str(duration)]
+    args.extend(["--preferred-start", preferred_start])
+    args.extend(["--preferred-end", preferred_end])
+    if exclude_calendars:
+        args.extend(["--exclude-calendars", ",".join(exclude_calendars)])
+    if include_all_day_as_busy:
+        args.append("--include-all-day-as-busy")
+    if ignore_tentative:
+        args.append("--ignore-tentative")
+    return run_cal_tools(*args)
+
+
 if __name__ == "__main__":
     mcp.run(transport="http")
