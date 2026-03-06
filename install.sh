@@ -38,6 +38,9 @@ echo "[3/7] Installing MCP server..."
 cp "$SCRIPT_DIR/calendar_mcp_server.py" "$DATA_DIR/calendar_mcp_server.py"
 cp "$SCRIPT_DIR/calendar-mcp-server.sh" "$DATA_DIR/calendar-mcp-server"
 chmod +x "$DATA_DIR/calendar-mcp-server"
+cp "$SCRIPT_DIR/macos-calendar-mcp.sh" "$BIN_DIR/macos-calendar-mcp"
+chmod +x "$BIN_DIR/macos-calendar-mcp"
+echo "  Installed: $BIN_DIR/macos-calendar-mcp"
 echo "  Installed: $DATA_DIR/calendar_mcp_server.py"
 
 # --- 4. Install Python dependency (in a virtual environment) ---
