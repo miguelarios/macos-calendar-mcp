@@ -18,7 +18,7 @@ CAL_TOOLS = os.environ.get(
     "CAL_TOOLS_PATH", os.path.expanduser("~/.local/bin/cal-tools")
 )
 
-mcp = FastMCP("Calendar", host=HOST, port=PORT)
+mcp = FastMCP("Calendar")
 
 
 # ---------------------------------------------------------------------------
@@ -327,4 +327,4 @@ def find_free_slots(
 
 
 if __name__ == "__main__":
-    mcp.run(transport="http")
+    mcp.run(transport="streamable-http", host=HOST, port=PORT)
