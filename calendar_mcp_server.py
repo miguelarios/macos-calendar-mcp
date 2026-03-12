@@ -11,6 +11,7 @@ import subprocess
 from datetime import date, timedelta
 
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("CALENDAR_MCP_PORT", "9876"))
@@ -29,13 +30,9 @@ mcp = FastMCP("Calendar")
 def run_cal_tools(*args: str) -> dict:
     """Run the cal-tools binary and return parsed JSON output."""
     if not os.path.isfile(CAL_TOOLS):
-        return {
-            "ok": False,
-            "error": (
-                f"cal-tools binary not found at {CAL_TOOLS}. "
-                "Run install.sh or set CAL_TOOLS_PATH."
-            ),
-        }
+        raise ToolError(
+            json.dumps({"error": "backend_error", "message": f"cal-tools binary not found at {CAL_TOOLS}. Run install.sh or set CAL_TOOLS_PATH."})
+        )
 
     try:
         result = subprocess.run(
@@ -45,26 +42,34 @@ def run_cal_tools(*args: str) -> dict:
             timeout=30,
         )
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "cal-tools timed out after 30 seconds."}
+        raise ToolError(
+            json.dumps({"error": "backend_error", "message": "cal-tools timed out after 30 seconds."})
+        )
     except OSError as exc:
-        return {"ok": False, "error": f"Failed to execute cal-tools: {exc}"}
+        raise ToolError(
+            json.dumps({"error": "backend_error", "message": f"Failed to execute cal-tools: {exc}"})
+        )
 
     if result.returncode != 0:
-        # cal-tools writes JSON to stderr on failure
+        # cal-tools writes structured JSON error to stderr
         if result.stderr.strip():
             try:
-                return json.loads(result.stderr)
+                err = json.loads(result.stderr)
+                raise ToolError(json.dumps(err))
             except json.JSONDecodeError:
-                return {"ok": False, "error": result.stderr.strip()}
-        return {"ok": False, "error": "cal-tools exited with an error."}
+                raise ToolError(
+                    json.dumps({"error": "backend_error", "message": result.stderr.strip()})
+                )
+        raise ToolError(
+            json.dumps({"error": "backend_error", "message": "cal-tools exited with an error."})
+        )
 
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
-        return {
-            "ok": False,
-            "error": f"Unexpected output from cal-tools: {result.stdout[:500]}",
-        }
+        raise ToolError(
+            json.dumps({"error": "backend_error", "message": f"Unexpected output from cal-tools: {result.stdout[:500]}"})
+        )
 
 
 # ---------------------------------------------------------------------------
