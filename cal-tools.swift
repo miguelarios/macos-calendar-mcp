@@ -736,6 +736,29 @@ class Args {
     }
 }
 
+// MARK: - Calendar Lookup Helpers
+
+func findCalendar(_ store: EKEventStore, _ nameOrId: String) -> EKCalendar? {
+    let all = store.calendars(for: .event)
+    // Try matching by calendarIdentifier first (exact match)
+    if let cal = all.first(where: { $0.calendarIdentifier == nameOrId }) {
+        return cal
+    }
+    // Fall back to matching by title (case-insensitive)
+    return all.first(where: { $0.title.lowercased() == nameOrId.lowercased() })
+}
+
+func findCalendars(_ store: EKEventStore, _ nameOrId: String) -> [EKCalendar] {
+    let all = store.calendars(for: .event)
+    // Try matching by calendarIdentifier first
+    if let cal = all.first(where: { $0.calendarIdentifier == nameOrId }) {
+        return [cal]
+    }
+    // Fall back to matching by title (case-insensitive, may match multiple)
+    let matched = all.filter { $0.title.lowercased() == nameOrId.lowercased() }
+    return matched
+}
+
 // MARK: - Commands
 
 func cmdCalendars(store: EKEventStore) {
@@ -772,8 +795,7 @@ func cmdEvents(store: EKEventStore, args: Args) {
 
     var calendars: [EKCalendar]? = nil
     if let calName = args.value("calendar") {
-        let all = store.calendars(for: .event)
-        let matched = all.filter { $0.title.lowercased() == calName.lowercased() }
+        let matched = findCalendars(store, calName)
         if matched.isEmpty {
             exitError("not_found", "Calendar '\(calName)' not found. Use 'cal-tools calendars' to list available calendars.")
         }
@@ -821,8 +843,7 @@ func cmdCreate(store: EKEventStore, args: Args) {
     event.endDate = endDate
 
     if let calName = args.value("calendar") {
-        let all = store.calendars(for: .event)
-        if let matched = all.first(where: { $0.title.lowercased() == calName.lowercased() }) {
+        if let matched = findCalendar(store, calName) {
             event.calendar = matched
         } else {
             exitError("not_found", "Calendar '\(calName)' not found.")
@@ -834,8 +855,8 @@ func cmdCreate(store: EKEventStore, args: Args) {
     if let location = args.value("location") {
         event.location = location
     }
-    if let notes = args.value("notes") {
-        event.notes = notes
+    if let description = args.value("description") {
+        event.notes = description
     }
     if let allDayStr = args.value("all-day") {
         event.isAllDay = (allDayStr.lowercased() == "true")
@@ -867,13 +888,12 @@ func cmdUpdate(store: EKEventStore, args: Args) {
         event.endDate = d
     }
     if let location = args.value("location") { event.location = location }
-    if let notes = args.value("notes") { event.notes = notes }
+    if let description = args.value("description") { event.notes = description }
     if let allDayStr = args.value("all-day") {
         event.isAllDay = (allDayStr.lowercased() == "true")
     }
     if let calName = args.value("calendar") {
-        let all = store.calendars(for: .event)
-        if let matched = all.first(where: { $0.title.lowercased() == calName.lowercased() }) {
+        if let matched = findCalendar(store, calName) {
             event.calendar = matched
         } else {
             exitError("not_found", "Calendar '\(calName)' not found.")
@@ -881,8 +901,12 @@ func cmdUpdate(store: EKEventStore, args: Args) {
     }
 
     var span: EKSpan = .thisEvent
-    if let spanStr = args.value("span"), spanStr == "future" {
-        span = .futureEvents
+    if let spanStr = args.value("span") {
+        switch spanStr {
+        case "future": span = .futureEvents
+        case "all": span = .futureEvents  // "all" applies to master = futureEvents from master
+        default: break  // "this" is the default
+        }
     }
 
     do {
@@ -901,9 +925,13 @@ func cmdDelete(store: EKEventStore, args: Args) {
         exitError("not_found", "Event not found with ID: \(eventId)")
     }
 
-    var span: EKSpan = .thisEvent
-    if let spanStr = args.value("span"), spanStr == "future" {
-        span = .futureEvents
+    var span: EKSpan = .futureEvents  // default "all" for delete
+    if let spanStr = args.value("span") {
+        switch spanStr {
+        case "this": span = .thisEvent
+        case "future": span = .futureEvents
+        default: break  // "all" is the default
+        }
     }
 
     do {
@@ -977,10 +1005,29 @@ func cmdAvailability(store: EKEventStore, args: Args) {
         }
     }
 
-    // Filter calendars
+    // Parse included calendars (comma-separated)
+    var includedNames: Set<String> = []
+    if let inc = args.value("calendars") {
+        for name in inc.split(separator: ",") {
+            includedNames.insert(name.trimmingCharacters(in: .whitespaces).lowercased())
+        }
+    }
+
+    // Filter calendars: include list takes priority over exclude list
     let allCalendars = store.calendars(for: .event)
-    let calendars: [EKCalendar]? = excludedNames.isEmpty ? nil : allCalendars.filter {
-        !excludedNames.contains($0.title.lowercased())
+    let calendars: [EKCalendar]?
+    if !includedNames.isEmpty {
+        calendars = allCalendars.filter {
+            includedNames.contains($0.title.lowercased()) ||
+            includedNames.contains($0.calendarIdentifier.lowercased())
+        }
+    } else if !excludedNames.isEmpty {
+        calendars = allCalendars.filter {
+            !excludedNames.contains($0.title.lowercased()) &&
+            !excludedNames.contains($0.calendarIdentifier.lowercased())
+        }
+    } else {
+        calendars = nil
     }
 
     // Fetch events in the full range
@@ -1046,18 +1093,22 @@ func cmdAvailability(store: EKEventStore, args: Args) {
         var cursor = windowStart
         for busy in merged {
             if busy.start.timeIntervalSince(cursor) >= durationSeconds {
+                let gapMinutes = Int(busy.start.timeIntervalSince(cursor) / 60)
                 slots.append([
                     "start": outputFormatter.string(from: cursor),
-                    "end": outputFormatter.string(from: busy.start)
+                    "end": outputFormatter.string(from: busy.start),
+                    "duration": gapMinutes
                 ])
             }
             cursor = max(cursor, busy.end)
         }
         // Check gap after last busy block
         if windowEnd.timeIntervalSince(cursor) >= durationSeconds {
+            let tailMinutes = Int(windowEnd.timeIntervalSince(cursor) / 60)
             slots.append([
                 "start": outputFormatter.string(from: cursor),
-                "end": outputFormatter.string(from: windowEnd)
+                "end": outputFormatter.string(from: windowEnd),
+                "duration": tailMinutes
             ])
         }
 
