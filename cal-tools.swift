@@ -14,16 +14,14 @@ func jsonString(_ value: Any) throws -> String {
 }
 
 func exitSuccess(_ payload: [String: Any]) -> Never {
-    var out = payload
-    out["ok"] = true
-    if let s = try? jsonString(out) {
+    if let s = try? jsonString(payload) {
         print(s)
     }
     exit(0)
 }
 
-func exitError(_ message: String) -> Never {
-    let payload: [String: Any] = ["ok": false, "error": message]
+func exitError(_ code: String, _ message: String) -> Never {
+    let payload: [String: Any] = ["error": code, "message": message]
     if let s = try? jsonString(payload) {
         FileHandle.standardError.write(s.data(using: .utf8)!)
     }
@@ -201,28 +199,22 @@ func buildVirtualConference(_ event: EKEvent) -> Any {
 
 // MARK: - Participant Helpers
 
-func mapParticipantStatus(_ status: EKParticipantStatus) -> String {
+func mapParticipantStatus(_ status: EKParticipantStatus) -> Any {
     switch status {
-    case .unknown:    return "unknown"
     case .pending:    return "pending"
     case .accepted:   return "accepted"
     case .declined:   return "declined"
     case .tentative:  return "tentative"
-    case .delegated:  return "delegated"
-    case .completed:  return "completed"
-    case .inProcess:  return "inProcess"
-    @unknown default: return "unknown"
+    default:          return NSNull()
     }
 }
 
-func mapParticipantRole(_ role: EKParticipantRole) -> String {
+func mapParticipantRole(_ role: EKParticipantRole) -> Any {
     switch role {
-    case .unknown:        return "unknown"
     case .required:       return "required"
     case .optional:       return "optional"
     case .chair:          return "chair"
-    case .nonParticipant: return "nonParticipant"
-    @unknown default:     return "unknown"
+    default:              return NSNull()
     }
 }
 
@@ -246,8 +238,9 @@ func serializeParticipants(_ event: EKEvent) -> [[String: Any]] {
                 .replacingOccurrences(of: "mailto:", with: ""),
             "status": mapParticipantStatus(attendee.participantStatus),
             "role": mapParticipantRole(attendee.participantRole),
+            // Backend-specific extras
             "type": mapParticipantType(attendee.participantType),
-            "isCurrentUser": attendee.isCurrentUser
+            "is_current_user": attendee.isCurrentUser
         ] as [String: Any]
     }
 }
@@ -258,7 +251,8 @@ func serializeOrganizer(_ event: EKEvent) -> Any {
         "name": nullable(organizer.name),
         "email": organizer.url.absoluteString
             .replacingOccurrences(of: "mailto:", with: ""),
-        "isCurrentUser": organizer.isCurrentUser
+        // Backend-specific extra
+        "is_current_user": organizer.isCurrentUser
     ] as [String: Any]
 }
 
@@ -296,18 +290,18 @@ func serializeAlarms(_ event: EKEvent) -> [[String: Any]] {
             dict["type"] = "location"
             dict["location"] = loc.title ?? "Unknown"
             dict["trigger"] = alarm.proximity == .enter ? "arrive" : "depart"
-            dict["triggerHuman"] = alarm.proximity == .enter
+            dict["trigger_human"] = alarm.proximity == .enter
                 ? "When arriving at \(loc.title ?? "location")"
                 : "When leaving \(loc.title ?? "location")"
         } else if let absoluteDate = alarm.absoluteDate {
             dict["type"] = "absolute"
             dict["trigger"] = outputFormatter.string(from: absoluteDate)
-            dict["triggerHuman"] = humanDateFormatter.string(from: absoluteDate)
+            dict["trigger_human"] = humanDateFormatter.string(from: absoluteDate)
         } else {
             let offset = alarm.relativeOffset
             dict["type"] = "relative"
             dict["trigger"] = Int(offset)
-            dict["triggerHuman"] = humanReadableOffset(offset)
+            dict["trigger_human"] = humanReadableOffset(offset)
         }
 
         result.append(dict)
@@ -467,73 +461,6 @@ func buildHumanRecurrence(_ rule: EKRecurrenceRule) -> String {
     return result
 }
 
-func serializeRecurrence(_ event: EKEvent) -> Any {
-    guard let rules = event.recurrenceRules, let rule = rules.first else { return NSNull() }
-
-    var dict: [String: Any] = [
-        "frequency": mapFrequency(rule.frequency),
-        "interval": rule.interval
-    ]
-
-    if let days = rule.daysOfTheWeek {
-        dict["daysOfWeek"] = days.map { day in
-            [
-                "dayOfWeek": mapDayOfWeek(day.dayOfTheWeek),
-                "weekNumber": day.weekNumber
-            ] as [String: Any]
-        }
-    } else {
-        dict["daysOfWeek"] = NSNull()
-    }
-
-    if let daysOfMonth = rule.daysOfTheMonth {
-        dict["daysOfMonth"] = daysOfMonth.map { $0.intValue }
-    } else {
-        dict["daysOfMonth"] = NSNull()
-    }
-
-    if let months = rule.monthsOfTheYear {
-        dict["monthsOfYear"] = months.map { $0.intValue }
-    } else {
-        dict["monthsOfYear"] = NSNull()
-    }
-
-    if let weeks = rule.weeksOfTheYear {
-        dict["weeksOfYear"] = weeks.map { $0.intValue }
-    } else {
-        dict["weeksOfYear"] = NSNull()
-    }
-
-    if let positions = rule.setPositions {
-        dict["setPositions"] = positions.map { $0.intValue }
-    } else {
-        dict["setPositions"] = NSNull()
-    }
-
-    if let end = rule.recurrenceEnd {
-        if let endDate = end.endDate {
-            dict["end"] = [
-                "type": "date",
-                "date": dateOnlyFormatter.string(from: endDate),
-                "count": NSNull()
-            ] as [String: Any]
-        } else {
-            dict["end"] = [
-                "type": "count",
-                "date": NSNull(),
-                "count": end.occurrenceCount
-            ] as [String: Any]
-        }
-    } else {
-        dict["end"] = NSNull()
-    }
-
-    dict["rruleString"] = buildRRuleString(rule)
-    dict["human"] = buildHumanRecurrence(rule)
-
-    return dict
-}
-
 // MARK: - Location Helpers
 
 func serializeLocation(_ event: EKEvent) -> Any {
@@ -565,13 +492,12 @@ func serializeLocation(_ event: EKEvent) -> Any {
 
 // MARK: - Event Status & Availability
 
-func mapEventStatus(_ status: EKEventStatus) -> String {
+func mapEventStatus(_ status: EKEventStatus) -> Any {
     switch status {
-    case .none:      return "none"
     case .confirmed: return "confirmed"
     case .tentative: return "tentative"
-    case .canceled:  return "canceled"
-    @unknown default: return "unknown"
+    case .canceled:  return "cancelled"
+    default:         return NSNull()
     }
 }
 
@@ -582,7 +508,7 @@ func mapAvailability(_ availability: EKEventAvailability) -> Any {
     case .free:         return "free"
     case .tentative:    return "tentative"
     case .unavailable:  return "unavailable"
-    @unknown default:   return "unknown"
+    @unknown default:   return NSNull()
     }
 }
 
@@ -596,13 +522,14 @@ enum DetailLevel: String {
 func serializeEvent(_ event: EKEvent, detail: DetailLevel = .full) -> [String: Any] {
     if detail == .summary {
         var dict: [String: Any] = [
-            "id": event.eventIdentifier ?? "",
+            "uid": event.eventIdentifier ?? "",
             "title": event.title ?? "(No Title)",
             "start": outputFormatter.string(from: event.startDate),
             "end": outputFormatter.string(from: event.endDate),
-            "allDay": event.isAllDay,
+            "all_day": event.isAllDay,
             "status": mapEventStatus(event.status),
-            "calendar": event.calendar?.title ?? ""
+            "calendar_id": event.calendar?.calendarIdentifier ?? "",
+            "is_recurring": event.hasRecurrenceRules
         ]
         if let loc = event.structuredLocation?.title ?? event.location, !loc.isEmpty {
             dict["location"] = loc
@@ -614,42 +541,55 @@ func serializeEvent(_ event: EKEvent, detail: DetailLevel = .full) -> [String: A
 
     // Full detail
     var dict: [String: Any] = [
-        "id": event.eventIdentifier ?? "",
+        "uid": event.eventIdentifier ?? "",
         "title": event.title ?? "(No Title)",
         "start": outputFormatter.string(from: event.startDate),
         "end": outputFormatter.string(from: event.endDate),
-        "allDay": event.isAllDay,
-        "status": mapEventStatus(event.status)
+        "all_day": event.isAllDay,
+        "status": mapEventStatus(event.status),
+        "is_recurring": event.hasRecurrenceRules
     ]
 
-    // Calendar as nested object
-    if let cal = event.calendar {
-        dict["calendar"] = [
-            "id": cal.calendarIdentifier,
-            "title": cal.title,
-            "color": hexColor(cal.cgColor)
-        ] as [String: Any]
-    } else {
-        dict["calendar"] = NSNull()
-    }
+    // Calendar ID (flat string, not nested object)
+    dict["calendar_id"] = event.calendar?.calendarIdentifier ?? ""
 
-    dict["location"] = serializeLocation(event)
+    // Location — spec requires string|null, not structured object
+    if let loc = event.structuredLocation?.title ?? event.location, !loc.isEmpty {
+        dict["location"] = loc
+    } else {
+        dict["location"] = NSNull()
+    }
+    // Backend-specific extra: structured location with coordinates
+    dict["location_detail"] = serializeLocation(event)
+
     dict["url"] = nullable(event.url?.absoluteString)
-    dict["notes"] = nullable(event.notes)
+    dict["description"] = nullable(event.notes)
     dict["availability"] = mapAvailability(event.availability)
 
-    // Travel time — no clean public API, documented as best-effort
-    dict["travelTime"] = NSNull()
+    // Backend-specific extras (allowed by spec)
+    dict["travel_time"] = NSNull()
+    dict["virtual_conference"] = buildVirtualConference(event)
 
-    dict["virtualConference"] = buildVirtualConference(event)
-    dict["participants"] = serializeParticipants(event)
+    // Unified attendees format
+    dict["attendees"] = serializeParticipants(event)
     dict["organizer"] = serializeOrganizer(event)
+
+    // Backend-specific extras
     dict["alarms"] = serializeAlarms(event)
-    dict["recurrence"] = serializeRecurrence(event)
-    dict["isDetached"] = event.isDetached
-    dict["occurrenceDate"] = outputFormatter.string(from: event.occurrenceDate)
-    dict["createdDate"] = formatDate(event.creationDate)
-    dict["lastModifiedDate"] = formatDate(event.lastModifiedDate)
+
+    // Recurrence — spec wants just the RRULE string
+    if let rules = event.recurrenceRules, let rule = rules.first {
+        dict["recurrence_rule"] = buildRRuleString(rule)
+    } else {
+        dict["recurrence_rule"] = NSNull()
+    }
+
+    // Backend-specific extras
+    dict["is_detached"] = event.isDetached
+    dict["occurrence_date"] = outputFormatter.string(from: event.occurrenceDate)
+
+    dict["created"] = formatDate(event.creationDate)
+    dict["last_modified"] = formatDate(event.lastModifiedDate)
 
     return dict
 }
@@ -682,17 +622,14 @@ func mapSourceType(_ type: EKSourceType?) -> String {
 
 func serializeCalendar(_ cal: EKCalendar) -> [String: Any] {
     return [
-        "id": cal.calendarIdentifier,
-        "title": cal.title,
+        "calendar_id": cal.calendarIdentifier,
+        "display_name": cal.title,
         "color": hexColor(cal.cgColor),
+        "source": cal.source?.title ?? "Unknown",
+        "read_only": !cal.allowsContentModifications,
+        // Backend-specific extras (allowed by spec)
         "type": mapCalendarType(cal.type),
-        "allowsModify": cal.allowsContentModifications,
-        "subscribed": cal.type == .subscription,
-        "source": [
-            "id": nullable(cal.source?.sourceIdentifier),
-            "title": nullable(cal.source?.title),
-            "type": mapSourceType(cal.source?.sourceType)
-        ] as [String: Any]
+        "subscribed": cal.type == .subscription
     ]
 }
 
@@ -732,6 +669,29 @@ class Args {
     }
 }
 
+// MARK: - Calendar Lookup Helpers
+
+func findCalendar(_ store: EKEventStore, _ nameOrId: String) -> EKCalendar? {
+    let all = store.calendars(for: .event)
+    // Try matching by calendarIdentifier first (exact match)
+    if let cal = all.first(where: { $0.calendarIdentifier == nameOrId }) {
+        return cal
+    }
+    // Fall back to matching by title (case-insensitive)
+    return all.first(where: { $0.title.lowercased() == nameOrId.lowercased() })
+}
+
+func findCalendars(_ store: EKEventStore, _ nameOrId: String) -> [EKCalendar] {
+    let all = store.calendars(for: .event)
+    // Try matching by calendarIdentifier first
+    if let cal = all.first(where: { $0.calendarIdentifier == nameOrId }) {
+        return [cal]
+    }
+    // Fall back to matching by title (case-insensitive, may match multiple)
+    let matched = all.filter { $0.title.lowercased() == nameOrId.lowercased() }
+    return matched
+}
+
 // MARK: - Commands
 
 func cmdCalendars(store: EKEventStore) {
@@ -755,23 +715,22 @@ func cmdEvents(store: EKEventStore, args: Args) {
         endDate = endOfDay(Date())
     } else if let fromStr = args.value("from"), let toStr = args.value("to") {
         guard let from = parseDate(fromStr) else {
-            exitError("Invalid --from date: \(fromStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
+            exitError("validation_error", "Invalid --from date: \(fromStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
         }
         guard let to = parseDate(toStr) else {
-            exitError("Invalid --to date: \(toStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
+            exitError("validation_error", "Invalid --to date: \(toStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
         }
         startDate = from
         endDate = to
     } else {
-        exitError("Provide a date range: --today, --days N, --past-days N, or --from/--to dates.")
+        exitError("validation_error", "Provide a date range: --today, --days N, --past-days N, or --from/--to dates.")
     }
 
     var calendars: [EKCalendar]? = nil
     if let calName = args.value("calendar") {
-        let all = store.calendars(for: .event)
-        let matched = all.filter { $0.title.lowercased() == calName.lowercased() }
+        let matched = findCalendars(store, calName)
         if matched.isEmpty {
-            exitError("Calendar '\(calName)' not found. Use 'cal-tools calendars' to list available calendars.")
+            exitError("not_found", "Calendar '\(calName)' not found. Use 'cal-tools calendars' to list available calendars.")
         }
         calendars = matched
     }
@@ -785,10 +744,10 @@ func cmdEvents(store: EKEventStore, args: Args) {
 
 func cmdEvent(store: EKEventStore, args: Args) {
     guard let eventId = args.value("id") else {
-        exitError("Missing --id parameter.")
+        exitError("validation_error", "Missing --id parameter.")
     }
     guard let event = store.event(withIdentifier: eventId) else {
-        exitError("Event not found with ID: \(eventId)")
+        exitError("not_found", "Event not found with ID: \(eventId)")
     }
     // Single event lookup always returns full detail
     exitSuccess(["event": serializeEvent(event, detail: .full)])
@@ -796,19 +755,19 @@ func cmdEvent(store: EKEventStore, args: Args) {
 
 func cmdCreate(store: EKEventStore, args: Args) {
     guard let title = args.value("title") else {
-        exitError("Missing --title parameter.")
+        exitError("validation_error", "Missing --title parameter.")
     }
     guard let startStr = args.value("start") else {
-        exitError("Missing --start parameter.")
+        exitError("validation_error", "Missing --start parameter.")
     }
     guard let endStr = args.value("end") else {
-        exitError("Missing --end parameter.")
+        exitError("validation_error", "Missing --end parameter.")
     }
     guard let startDate = parseDate(startStr) else {
-        exitError("Invalid --start date: \(startStr)")
+        exitError("validation_error", "Invalid --start date: \(startStr)")
     }
     guard let endDate = parseDate(endStr) else {
-        exitError("Invalid --end date: \(endStr)")
+        exitError("validation_error", "Invalid --end date: \(endStr)")
     }
 
     let event = EKEvent(eventStore: store)
@@ -817,11 +776,10 @@ func cmdCreate(store: EKEventStore, args: Args) {
     event.endDate = endDate
 
     if let calName = args.value("calendar") {
-        let all = store.calendars(for: .event)
-        if let matched = all.first(where: { $0.title.lowercased() == calName.lowercased() }) {
+        if let matched = findCalendar(store, calName) {
             event.calendar = matched
         } else {
-            exitError("Calendar '\(calName)' not found.")
+            exitError("not_found", "Calendar '\(calName)' not found.")
         }
     } else {
         event.calendar = store.defaultCalendarForNewEvents
@@ -830,8 +788,8 @@ func cmdCreate(store: EKEventStore, args: Args) {
     if let location = args.value("location") {
         event.location = location
     }
-    if let notes = args.value("notes") {
-        event.notes = notes
+    if let description = args.value("description") {
+        event.notes = description
     }
     if let allDayStr = args.value("all-day") {
         event.isAllDay = (allDayStr.lowercased() == "true")
@@ -841,78 +799,85 @@ func cmdCreate(store: EKEventStore, args: Args) {
         try store.save(event, span: .thisEvent)
         exitSuccess(["event": serializeEvent(event)])
     } catch {
-        exitError("Failed to create event: \(error.localizedDescription)")
+        exitError("backend_error", "Failed to create event: \(error.localizedDescription)")
     }
 }
 
 func cmdUpdate(store: EKEventStore, args: Args) {
     guard let eventId = args.value("id") else {
-        exitError("Missing --id parameter.")
+        exitError("validation_error", "Missing --id parameter.")
     }
     guard let event = store.event(withIdentifier: eventId) else {
-        exitError("Event not found with ID: \(eventId)")
+        exitError("not_found", "Event not found with ID: \(eventId)")
     }
 
     if let title = args.value("title") { event.title = title }
     if let startStr = args.value("start") {
-        guard let d = parseDate(startStr) else { exitError("Invalid --start date: \(startStr)") }
+        guard let d = parseDate(startStr) else { exitError("validation_error", "Invalid --start date: \(startStr)") }
         event.startDate = d
     }
     if let endStr = args.value("end") {
-        guard let d = parseDate(endStr) else { exitError("Invalid --end date: \(endStr)") }
+        guard let d = parseDate(endStr) else { exitError("validation_error", "Invalid --end date: \(endStr)") }
         event.endDate = d
     }
     if let location = args.value("location") { event.location = location }
-    if let notes = args.value("notes") { event.notes = notes }
+    if let description = args.value("description") { event.notes = description }
     if let allDayStr = args.value("all-day") {
         event.isAllDay = (allDayStr.lowercased() == "true")
     }
     if let calName = args.value("calendar") {
-        let all = store.calendars(for: .event)
-        if let matched = all.first(where: { $0.title.lowercased() == calName.lowercased() }) {
+        if let matched = findCalendar(store, calName) {
             event.calendar = matched
         } else {
-            exitError("Calendar '\(calName)' not found.")
+            exitError("not_found", "Calendar '\(calName)' not found.")
         }
     }
 
     var span: EKSpan = .thisEvent
-    if let spanStr = args.value("span"), spanStr == "future" {
-        span = .futureEvents
+    if let spanStr = args.value("span") {
+        switch spanStr {
+        case "future": span = .futureEvents
+        case "all": span = .futureEvents  // "all" applies to master = futureEvents from master
+        default: break  // "this" is the default
+        }
     }
 
     do {
         try store.save(event, span: span)
         exitSuccess(["event": serializeEvent(event)])
     } catch {
-        exitError("Failed to update event: \(error.localizedDescription)")
+        exitError("backend_error", "Failed to update event: \(error.localizedDescription)")
     }
 }
 
 func cmdDelete(store: EKEventStore, args: Args) {
     guard let eventId = args.value("id") else {
-        exitError("Missing --id parameter.")
+        exitError("validation_error", "Missing --id parameter.")
     }
     guard let event = store.event(withIdentifier: eventId) else {
-        exitError("Event not found with ID: \(eventId)")
+        exitError("not_found", "Event not found with ID: \(eventId)")
     }
 
-    var span: EKSpan = .thisEvent
-    if let spanStr = args.value("span"), spanStr == "future" {
-        span = .futureEvents
+    var span: EKSpan = .futureEvents  // default "all" for delete
+    if let spanStr = args.value("span") {
+        switch spanStr {
+        case "this": span = .thisEvent
+        case "future": span = .futureEvents
+        default: break  // "all" is the default
+        }
     }
 
     do {
         try store.remove(event, span: span)
-        exitSuccess(["deleted": true, "id": eventId])
+        exitSuccess(["deleted": true, "uid": eventId])
     } catch {
-        exitError("Failed to delete event: \(error.localizedDescription)")
+        exitError("backend_error", "Failed to delete event: \(error.localizedDescription)")
     }
 }
 
 func cmdSearch(store: EKEventStore, args: Args) {
     guard let query = args.value("query") else {
-        exitError("Missing --query parameter.")
+        exitError("validation_error", "Missing --query parameter.")
     }
 
     let now = Date()
@@ -943,21 +908,21 @@ func cmdSearch(store: EKEventStore, args: Args) {
     }.sorted { $0.startDate < $1.startDate }
 
     let serialized = matched.map { serializeEvent($0, detail: detail) }
-    exitSuccess(["events": serialized, "query": query, "count": serialized.count])
+    exitSuccess(["events": serialized])
 }
 
 func cmdAvailability(store: EKEventStore, args: Args) {
     guard let fromStr = args.value("from"), let toStr = args.value("to") else {
-        exitError("Missing --from and --to parameters.")
+        exitError("validation_error", "Missing --from and --to parameters.")
     }
     guard let fromDate = parseDate(fromStr) else {
-        exitError("Invalid --from date: \(fromStr)")
+        exitError("validation_error", "Invalid --from date: \(fromStr)")
     }
     guard let toDate = parseDate(toStr) else {
-        exitError("Invalid --to date: \(toStr)")
+        exitError("validation_error", "Invalid --to date: \(toStr)")
     }
     guard let durationStr = args.value("duration"), let duration = Int(durationStr), duration > 0 else {
-        exitError("Missing or invalid --duration parameter (positive integer minutes).")
+        exitError("validation_error", "Missing or invalid --duration parameter (positive integer minutes).")
     }
 
     let prefStart = args.value("preferred-start") ?? "08:00"
@@ -973,10 +938,29 @@ func cmdAvailability(store: EKEventStore, args: Args) {
         }
     }
 
-    // Filter calendars
+    // Parse included calendars (comma-separated)
+    var includedNames: Set<String> = []
+    if let inc = args.value("calendars") {
+        for name in inc.split(separator: ",") {
+            includedNames.insert(name.trimmingCharacters(in: .whitespaces).lowercased())
+        }
+    }
+
+    // Filter calendars: include list takes priority over exclude list
     let allCalendars = store.calendars(for: .event)
-    let calendars: [EKCalendar]? = excludedNames.isEmpty ? nil : allCalendars.filter {
-        !excludedNames.contains($0.title.lowercased())
+    let calendars: [EKCalendar]?
+    if !includedNames.isEmpty {
+        calendars = allCalendars.filter {
+            includedNames.contains($0.title.lowercased()) ||
+            includedNames.contains($0.calendarIdentifier.lowercased())
+        }
+    } else if !excludedNames.isEmpty {
+        calendars = allCalendars.filter {
+            !excludedNames.contains($0.title.lowercased()) &&
+            !excludedNames.contains($0.calendarIdentifier.lowercased())
+        }
+    } else {
+        calendars = nil
     }
 
     // Fetch events in the full range
@@ -1006,11 +990,11 @@ func cmdAvailability(store: EKEventStore, args: Args) {
     while currentDay <= lastDay {
         guard let windowStart = timeOfDay(prefStart, on: currentDay),
               let windowEnd = timeOfDay(prefEnd, on: currentDay) else {
-            exitError("Invalid preferred-start or preferred-end time format. Use HH:MM.")
+            exitError("validation_error", "Invalid preferred-start or preferred-end time format. Use HH:MM.")
         }
 
         if windowStart >= windowEnd {
-            exitError("preferred-start must be before preferred-end.")
+            exitError("validation_error", "preferred-start must be before preferred-end.")
         }
 
         // Collect busy intervals overlapping this day's window
@@ -1042,18 +1026,22 @@ func cmdAvailability(store: EKEventStore, args: Args) {
         var cursor = windowStart
         for busy in merged {
             if busy.start.timeIntervalSince(cursor) >= durationSeconds {
+                let gapMinutes = Int(busy.start.timeIntervalSince(cursor) / 60)
                 slots.append([
                     "start": outputFormatter.string(from: cursor),
-                    "end": outputFormatter.string(from: busy.start)
+                    "end": outputFormatter.string(from: busy.start),
+                    "duration": gapMinutes
                 ])
             }
             cursor = max(cursor, busy.end)
         }
         // Check gap after last busy block
         if windowEnd.timeIntervalSince(cursor) >= durationSeconds {
+            let tailMinutes = Int(windowEnd.timeIntervalSince(cursor) / 60)
             slots.append([
                 "start": outputFormatter.string(from: cursor),
-                "end": outputFormatter.string(from: windowEnd)
+                "end": outputFormatter.string(from: windowEnd),
+                "duration": tailMinutes
             ])
         }
 
@@ -1070,7 +1058,7 @@ let semaphore = DispatchSemaphore(value: 0)
 let parsedArgs = Args()
 
 guard let subcommand = parsedArgs.subcommand else {
-    exitError("Usage: cal-tools <calendars|events|event|create|update|delete|search|availability> [options]")
+    exitError("validation_error", "Usage: cal-tools <calendars|events|event|create|update|delete|search|availability> [options]")
 }
 
 let requestAccess: (@escaping (Bool, Error?) -> Void) -> Void = { completion in
@@ -1086,7 +1074,7 @@ requestAccess { granted, error in
 
     guard granted else {
         let msg = error?.localizedDescription ?? "unknown error"
-        exitError("Calendar access denied (\(msg)). Grant permission in System Settings > Privacy & Security > Calendars.")
+        exitError("backend_error", "Calendar access denied (\(msg)). Grant permission in System Settings > Privacy & Security > Calendars.")
     }
 
     switch subcommand {
@@ -1107,7 +1095,7 @@ requestAccess { granted, error in
     case "availability":
         cmdAvailability(store: store, args: parsedArgs)
     default:
-        exitError("Unknown command: \(subcommand). Use: calendars, events, event, create, update, delete, search, availability")
+        exitError("validation_error", "Unknown command: \(subcommand). Use: calendars, events, event, create, update, delete, search, availability")
     }
 }
 

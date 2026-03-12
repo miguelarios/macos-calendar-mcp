@@ -14,7 +14,7 @@ AI Agent → Streamable HTTP (localhost:9876/mcp) → FastMCP Server (Python) �
 ## Key Files
 
 - **cal-tools.swift** — Swift CLI wrapping EventKit for all calendar read/write operations. All output is JSON.
-- **calendar_mcp_server.py** — FastMCP server exposing 10 MCP tools over Streamable HTTP. Calls cal-tools as a subprocess.
+- **calendar_mcp_server.py** — FastMCP server exposing MCP tools over Streamable HTTP. Calls cal-tools as a subprocess.
 - **com.local.calendar-mcp.plist** — LaunchAgent template (uses `HOMEDIR` placeholder replaced at install time).
 - **install.sh / uninstall.sh** — Install and cleanup scripts.
 
@@ -42,9 +42,11 @@ CAL_TOOLS_PATH=~/.local/bin/cal-tools CALENDAR_MCP_PORT=9876 python3 calendar_mc
 ```bash
 cal-tools calendars
 cal-tools events --today
+cal-tools events --from 2026-03-09 --to 2026-03-11
 cal-tools events --days 7
 cal-tools search --query "standup"
 cal-tools create --title "Test" --start "2025-01-15T10:00:00" --end "2025-01-15T11:00:00"
+cal-tools create --title "Test" --start "2025-01-15T10:00:00" --end "2025-01-15T11:00:00" --description "Meeting notes"
 cal-tools availability --from 2026-03-09 --to 2026-03-11 --duration 30 --preferred-start 08:00 --preferred-end 17:00
 ```
 
@@ -70,6 +72,10 @@ macos-calendar-mcp status
 |----------|---------|---------|
 | `CAL_TOOLS_PATH` | `~/.local/bin/cal-tools` | Path to Swift binary |
 | `CALENDAR_MCP_PORT` | `9876` | Server port |
+
+## Unified Schema
+
+This server conforms to the Unified Calendar MCP Tool Schema v1.1 — see `docs/unified-calendar-mcp-spec-v1.md`. Tool names, parameter names, and response shapes are standardized across this server and `pim-agents/cal-mcp`.
 
 ## Architecture Notes
 
