@@ -290,18 +290,18 @@ func serializeAlarms(_ event: EKEvent) -> [[String: Any]] {
             dict["type"] = "location"
             dict["location"] = loc.title ?? "Unknown"
             dict["trigger"] = alarm.proximity == .enter ? "arrive" : "depart"
-            dict["triggerHuman"] = alarm.proximity == .enter
+            dict["trigger_human"] = alarm.proximity == .enter
                 ? "When arriving at \(loc.title ?? "location")"
                 : "When leaving \(loc.title ?? "location")"
         } else if let absoluteDate = alarm.absoluteDate {
             dict["type"] = "absolute"
             dict["trigger"] = outputFormatter.string(from: absoluteDate)
-            dict["triggerHuman"] = humanDateFormatter.string(from: absoluteDate)
+            dict["trigger_human"] = humanDateFormatter.string(from: absoluteDate)
         } else {
             let offset = alarm.relativeOffset
             dict["type"] = "relative"
             dict["trigger"] = Int(offset)
-            dict["triggerHuman"] = humanReadableOffset(offset)
+            dict["trigger_human"] = humanReadableOffset(offset)
         }
 
         result.append(dict)
@@ -459,73 +459,6 @@ func buildHumanRecurrence(_ rule: EKRecurrenceRule) -> String {
     }
 
     return result
-}
-
-func serializeRecurrence(_ event: EKEvent) -> Any {
-    guard let rules = event.recurrenceRules, let rule = rules.first else { return NSNull() }
-
-    var dict: [String: Any] = [
-        "frequency": mapFrequency(rule.frequency),
-        "interval": rule.interval
-    ]
-
-    if let days = rule.daysOfTheWeek {
-        dict["daysOfWeek"] = days.map { day in
-            [
-                "dayOfWeek": mapDayOfWeek(day.dayOfTheWeek),
-                "weekNumber": day.weekNumber
-            ] as [String: Any]
-        }
-    } else {
-        dict["daysOfWeek"] = NSNull()
-    }
-
-    if let daysOfMonth = rule.daysOfTheMonth {
-        dict["daysOfMonth"] = daysOfMonth.map { $0.intValue }
-    } else {
-        dict["daysOfMonth"] = NSNull()
-    }
-
-    if let months = rule.monthsOfTheYear {
-        dict["monthsOfYear"] = months.map { $0.intValue }
-    } else {
-        dict["monthsOfYear"] = NSNull()
-    }
-
-    if let weeks = rule.weeksOfTheYear {
-        dict["weeksOfYear"] = weeks.map { $0.intValue }
-    } else {
-        dict["weeksOfYear"] = NSNull()
-    }
-
-    if let positions = rule.setPositions {
-        dict["setPositions"] = positions.map { $0.intValue }
-    } else {
-        dict["setPositions"] = NSNull()
-    }
-
-    if let end = rule.recurrenceEnd {
-        if let endDate = end.endDate {
-            dict["end"] = [
-                "type": "date",
-                "date": dateOnlyFormatter.string(from: endDate),
-                "count": NSNull()
-            ] as [String: Any]
-        } else {
-            dict["end"] = [
-                "type": "count",
-                "date": NSNull(),
-                "count": end.occurrenceCount
-            ] as [String: Any]
-        }
-    } else {
-        dict["end"] = NSNull()
-    }
-
-    dict["rruleString"] = buildRRuleString(rule)
-    dict["human"] = buildHumanRecurrence(rule)
-
-    return dict
 }
 
 // MARK: - Location Helpers

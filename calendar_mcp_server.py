@@ -8,7 +8,6 @@ Delegates all EventKit work to the compiled `cal-tools` Swift binary.
 import json
 import os
 import subprocess
-from datetime import date, timedelta
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -129,7 +128,6 @@ def get_today_events(calendar: str = "", detail_level: str = "summary") -> dict:
 @mcp.tool()
 def search_events(
     query: str,
-    calendar: str = "",
     start: str = "",
     end: str = "",
     detail_level: str = "summary",
@@ -138,15 +136,12 @@ def search_events(
 
     Args:
         query: Search term.
-        calendar: Optional calendar ID to filter by.
         start: Optional start date (defaults to 90 days ago).
         end: Optional end date (defaults to 90 days ahead).
         detail_level: "summary" (default) for lightweight output or "full" for
                       complete detail including attendees, recurrence, etc.
     """
     args = ["search", "--query", query]
-    if calendar:
-        args.extend(["--calendar", calendar])
     if start:
         args.extend(["--from", start])
     if end:
@@ -352,7 +347,12 @@ def create_events_batch(
             result = run_cal_tools(*args)
             created.append(result.get("event", result))
         except ToolError as e:
-            errors.append({"index": i, "error": "backend_error", "message": str(e)})
+            try:
+                err = json.loads(str(e))
+                err["index"] = i
+                errors.append(err)
+            except json.JSONDecodeError:
+                errors.append({"index": i, "error": "backend_error", "message": str(e)})
     result = {"created": len(created), "events": created}
     if errors:
         result["errors"] = errors
