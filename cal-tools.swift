@@ -14,16 +14,14 @@ func jsonString(_ value: Any) throws -> String {
 }
 
 func exitSuccess(_ payload: [String: Any]) -> Never {
-    var out = payload
-    out["ok"] = true
-    if let s = try? jsonString(out) {
+    if let s = try? jsonString(payload) {
         print(s)
     }
     exit(0)
 }
 
-func exitError(_ message: String) -> Never {
-    let payload: [String: Any] = ["ok": false, "error": message]
+func exitError(_ code: String, _ message: String) -> Never {
+    let payload: [String: Any] = ["error": code, "message": message]
     if let s = try? jsonString(payload) {
         FileHandle.standardError.write(s.data(using: .utf8)!)
     }
@@ -755,15 +753,15 @@ func cmdEvents(store: EKEventStore, args: Args) {
         endDate = endOfDay(Date())
     } else if let fromStr = args.value("from"), let toStr = args.value("to") {
         guard let from = parseDate(fromStr) else {
-            exitError("Invalid --from date: \(fromStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
+            exitError("validation_error", "Invalid --from date: \(fromStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
         }
         guard let to = parseDate(toStr) else {
-            exitError("Invalid --to date: \(toStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
+            exitError("validation_error", "Invalid --to date: \(toStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
         }
         startDate = from
         endDate = to
     } else {
-        exitError("Provide a date range: --today, --days N, --past-days N, or --from/--to dates.")
+        exitError("validation_error", "Provide a date range: --today, --days N, --past-days N, or --from/--to dates.")
     }
 
     var calendars: [EKCalendar]? = nil
@@ -771,7 +769,7 @@ func cmdEvents(store: EKEventStore, args: Args) {
         let all = store.calendars(for: .event)
         let matched = all.filter { $0.title.lowercased() == calName.lowercased() }
         if matched.isEmpty {
-            exitError("Calendar '\(calName)' not found. Use 'cal-tools calendars' to list available calendars.")
+            exitError("not_found", "Calendar '\(calName)' not found. Use 'cal-tools calendars' to list available calendars.")
         }
         calendars = matched
     }
@@ -785,10 +783,10 @@ func cmdEvents(store: EKEventStore, args: Args) {
 
 func cmdEvent(store: EKEventStore, args: Args) {
     guard let eventId = args.value("id") else {
-        exitError("Missing --id parameter.")
+        exitError("validation_error", "Missing --id parameter.")
     }
     guard let event = store.event(withIdentifier: eventId) else {
-        exitError("Event not found with ID: \(eventId)")
+        exitError("not_found", "Event not found with ID: \(eventId)")
     }
     // Single event lookup always returns full detail
     exitSuccess(["event": serializeEvent(event, detail: .full)])
@@ -796,19 +794,19 @@ func cmdEvent(store: EKEventStore, args: Args) {
 
 func cmdCreate(store: EKEventStore, args: Args) {
     guard let title = args.value("title") else {
-        exitError("Missing --title parameter.")
+        exitError("validation_error", "Missing --title parameter.")
     }
     guard let startStr = args.value("start") else {
-        exitError("Missing --start parameter.")
+        exitError("validation_error", "Missing --start parameter.")
     }
     guard let endStr = args.value("end") else {
-        exitError("Missing --end parameter.")
+        exitError("validation_error", "Missing --end parameter.")
     }
     guard let startDate = parseDate(startStr) else {
-        exitError("Invalid --start date: \(startStr)")
+        exitError("validation_error", "Invalid --start date: \(startStr)")
     }
     guard let endDate = parseDate(endStr) else {
-        exitError("Invalid --end date: \(endStr)")
+        exitError("validation_error", "Invalid --end date: \(endStr)")
     }
 
     let event = EKEvent(eventStore: store)
@@ -821,7 +819,7 @@ func cmdCreate(store: EKEventStore, args: Args) {
         if let matched = all.first(where: { $0.title.lowercased() == calName.lowercased() }) {
             event.calendar = matched
         } else {
-            exitError("Calendar '\(calName)' not found.")
+            exitError("not_found", "Calendar '\(calName)' not found.")
         }
     } else {
         event.calendar = store.defaultCalendarForNewEvents
@@ -841,25 +839,25 @@ func cmdCreate(store: EKEventStore, args: Args) {
         try store.save(event, span: .thisEvent)
         exitSuccess(["event": serializeEvent(event)])
     } catch {
-        exitError("Failed to create event: \(error.localizedDescription)")
+        exitError("backend_error", "Failed to create event: \(error.localizedDescription)")
     }
 }
 
 func cmdUpdate(store: EKEventStore, args: Args) {
     guard let eventId = args.value("id") else {
-        exitError("Missing --id parameter.")
+        exitError("validation_error", "Missing --id parameter.")
     }
     guard let event = store.event(withIdentifier: eventId) else {
-        exitError("Event not found with ID: \(eventId)")
+        exitError("not_found", "Event not found with ID: \(eventId)")
     }
 
     if let title = args.value("title") { event.title = title }
     if let startStr = args.value("start") {
-        guard let d = parseDate(startStr) else { exitError("Invalid --start date: \(startStr)") }
+        guard let d = parseDate(startStr) else { exitError("validation_error", "Invalid --start date: \(startStr)") }
         event.startDate = d
     }
     if let endStr = args.value("end") {
-        guard let d = parseDate(endStr) else { exitError("Invalid --end date: \(endStr)") }
+        guard let d = parseDate(endStr) else { exitError("validation_error", "Invalid --end date: \(endStr)") }
         event.endDate = d
     }
     if let location = args.value("location") { event.location = location }
@@ -872,7 +870,7 @@ func cmdUpdate(store: EKEventStore, args: Args) {
         if let matched = all.first(where: { $0.title.lowercased() == calName.lowercased() }) {
             event.calendar = matched
         } else {
-            exitError("Calendar '\(calName)' not found.")
+            exitError("not_found", "Calendar '\(calName)' not found.")
         }
     }
 
@@ -885,16 +883,16 @@ func cmdUpdate(store: EKEventStore, args: Args) {
         try store.save(event, span: span)
         exitSuccess(["event": serializeEvent(event)])
     } catch {
-        exitError("Failed to update event: \(error.localizedDescription)")
+        exitError("backend_error", "Failed to update event: \(error.localizedDescription)")
     }
 }
 
 func cmdDelete(store: EKEventStore, args: Args) {
     guard let eventId = args.value("id") else {
-        exitError("Missing --id parameter.")
+        exitError("validation_error", "Missing --id parameter.")
     }
     guard let event = store.event(withIdentifier: eventId) else {
-        exitError("Event not found with ID: \(eventId)")
+        exitError("not_found", "Event not found with ID: \(eventId)")
     }
 
     var span: EKSpan = .thisEvent
@@ -906,13 +904,13 @@ func cmdDelete(store: EKEventStore, args: Args) {
         try store.remove(event, span: span)
         exitSuccess(["deleted": true, "id": eventId])
     } catch {
-        exitError("Failed to delete event: \(error.localizedDescription)")
+        exitError("backend_error", "Failed to delete event: \(error.localizedDescription)")
     }
 }
 
 func cmdSearch(store: EKEventStore, args: Args) {
     guard let query = args.value("query") else {
-        exitError("Missing --query parameter.")
+        exitError("validation_error", "Missing --query parameter.")
     }
 
     let now = Date()
@@ -948,16 +946,16 @@ func cmdSearch(store: EKEventStore, args: Args) {
 
 func cmdAvailability(store: EKEventStore, args: Args) {
     guard let fromStr = args.value("from"), let toStr = args.value("to") else {
-        exitError("Missing --from and --to parameters.")
+        exitError("validation_error", "Missing --from and --to parameters.")
     }
     guard let fromDate = parseDate(fromStr) else {
-        exitError("Invalid --from date: \(fromStr)")
+        exitError("validation_error", "Invalid --from date: \(fromStr)")
     }
     guard let toDate = parseDate(toStr) else {
-        exitError("Invalid --to date: \(toStr)")
+        exitError("validation_error", "Invalid --to date: \(toStr)")
     }
     guard let durationStr = args.value("duration"), let duration = Int(durationStr), duration > 0 else {
-        exitError("Missing or invalid --duration parameter (positive integer minutes).")
+        exitError("validation_error", "Missing or invalid --duration parameter (positive integer minutes).")
     }
 
     let prefStart = args.value("preferred-start") ?? "08:00"
@@ -1006,11 +1004,11 @@ func cmdAvailability(store: EKEventStore, args: Args) {
     while currentDay <= lastDay {
         guard let windowStart = timeOfDay(prefStart, on: currentDay),
               let windowEnd = timeOfDay(prefEnd, on: currentDay) else {
-            exitError("Invalid preferred-start or preferred-end time format. Use HH:MM.")
+            exitError("validation_error", "Invalid preferred-start or preferred-end time format. Use HH:MM.")
         }
 
         if windowStart >= windowEnd {
-            exitError("preferred-start must be before preferred-end.")
+            exitError("validation_error", "preferred-start must be before preferred-end.")
         }
 
         // Collect busy intervals overlapping this day's window
@@ -1070,7 +1068,7 @@ let semaphore = DispatchSemaphore(value: 0)
 let parsedArgs = Args()
 
 guard let subcommand = parsedArgs.subcommand else {
-    exitError("Usage: cal-tools <calendars|events|event|create|update|delete|search|availability> [options]")
+    exitError("validation_error", "Usage: cal-tools <calendars|events|event|create|update|delete|search|availability> [options]")
 }
 
 let requestAccess: (@escaping (Bool, Error?) -> Void) -> Void = { completion in
@@ -1086,7 +1084,7 @@ requestAccess { granted, error in
 
     guard granted else {
         let msg = error?.localizedDescription ?? "unknown error"
-        exitError("Calendar access denied (\(msg)). Grant permission in System Settings > Privacy & Security > Calendars.")
+        exitError("backend_error", "Calendar access denied (\(msg)). Grant permission in System Settings > Privacy & Security > Calendars.")
     }
 
     switch subcommand {
@@ -1107,7 +1105,7 @@ requestAccess { granted, error in
     case "availability":
         cmdAvailability(store: store, args: parsedArgs)
     default:
-        exitError("Unknown command: \(subcommand). Use: calendars, events, event, create, update, delete, search, availability")
+        exitError("validation_error", "Unknown command: \(subcommand). Use: calendars, events, event, create, update, delete, search, availability")
     }
 }
 
