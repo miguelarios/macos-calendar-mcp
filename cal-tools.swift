@@ -199,28 +199,22 @@ func buildVirtualConference(_ event: EKEvent) -> Any {
 
 // MARK: - Participant Helpers
 
-func mapParticipantStatus(_ status: EKParticipantStatus) -> String {
+func mapParticipantStatus(_ status: EKParticipantStatus) -> Any {
     switch status {
-    case .unknown:    return "unknown"
     case .pending:    return "pending"
     case .accepted:   return "accepted"
     case .declined:   return "declined"
     case .tentative:  return "tentative"
-    case .delegated:  return "delegated"
-    case .completed:  return "completed"
-    case .inProcess:  return "inProcess"
-    @unknown default: return "unknown"
+    default:          return NSNull()
     }
 }
 
-func mapParticipantRole(_ role: EKParticipantRole) -> String {
+func mapParticipantRole(_ role: EKParticipantRole) -> Any {
     switch role {
-    case .unknown:        return "unknown"
     case .required:       return "required"
     case .optional:       return "optional"
     case .chair:          return "chair"
-    case .nonParticipant: return "nonParticipant"
-    @unknown default:     return "unknown"
+    default:              return NSNull()
     }
 }
 
@@ -244,8 +238,9 @@ func serializeParticipants(_ event: EKEvent) -> [[String: Any]] {
                 .replacingOccurrences(of: "mailto:", with: ""),
             "status": mapParticipantStatus(attendee.participantStatus),
             "role": mapParticipantRole(attendee.participantRole),
+            // Backend-specific extras
             "type": mapParticipantType(attendee.participantType),
-            "isCurrentUser": attendee.isCurrentUser
+            "is_current_user": attendee.isCurrentUser
         ] as [String: Any]
     }
 }
@@ -256,7 +251,8 @@ func serializeOrganizer(_ event: EKEvent) -> Any {
         "name": nullable(organizer.name),
         "email": organizer.url.absoluteString
             .replacingOccurrences(of: "mailto:", with: ""),
-        "isCurrentUser": organizer.isCurrentUser
+        // Backend-specific extra
+        "is_current_user": organizer.isCurrentUser
     ] as [String: Any]
 }
 
@@ -563,13 +559,12 @@ func serializeLocation(_ event: EKEvent) -> Any {
 
 // MARK: - Event Status & Availability
 
-func mapEventStatus(_ status: EKEventStatus) -> String {
+func mapEventStatus(_ status: EKEventStatus) -> Any {
     switch status {
-    case .none:      return "none"
     case .confirmed: return "confirmed"
     case .tentative: return "tentative"
-    case .canceled:  return "canceled"
-    @unknown default: return "unknown"
+    case .canceled:  return "cancelled"
+    default:         return NSNull()
     }
 }
 
@@ -580,7 +575,7 @@ func mapAvailability(_ availability: EKEventAvailability) -> Any {
     case .free:         return "free"
     case .tentative:    return "tentative"
     case .unavailable:  return "unavailable"
-    @unknown default:   return "unknown"
+    @unknown default:   return NSNull()
     }
 }
 
@@ -594,13 +589,14 @@ enum DetailLevel: String {
 func serializeEvent(_ event: EKEvent, detail: DetailLevel = .full) -> [String: Any] {
     if detail == .summary {
         var dict: [String: Any] = [
-            "id": event.eventIdentifier ?? "",
+            "uid": event.eventIdentifier ?? "",
             "title": event.title ?? "(No Title)",
             "start": outputFormatter.string(from: event.startDate),
             "end": outputFormatter.string(from: event.endDate),
-            "allDay": event.isAllDay,
+            "all_day": event.isAllDay,
             "status": mapEventStatus(event.status),
-            "calendar": event.calendar?.title ?? ""
+            "calendar_id": event.calendar?.calendarIdentifier ?? "",
+            "is_recurring": event.hasRecurrenceRules
         ]
         if let loc = event.structuredLocation?.title ?? event.location, !loc.isEmpty {
             dict["location"] = loc
@@ -612,42 +608,55 @@ func serializeEvent(_ event: EKEvent, detail: DetailLevel = .full) -> [String: A
 
     // Full detail
     var dict: [String: Any] = [
-        "id": event.eventIdentifier ?? "",
+        "uid": event.eventIdentifier ?? "",
         "title": event.title ?? "(No Title)",
         "start": outputFormatter.string(from: event.startDate),
         "end": outputFormatter.string(from: event.endDate),
-        "allDay": event.isAllDay,
-        "status": mapEventStatus(event.status)
+        "all_day": event.isAllDay,
+        "status": mapEventStatus(event.status),
+        "is_recurring": event.hasRecurrenceRules
     ]
 
-    // Calendar as nested object
-    if let cal = event.calendar {
-        dict["calendar"] = [
-            "id": cal.calendarIdentifier,
-            "title": cal.title,
-            "color": hexColor(cal.cgColor)
-        ] as [String: Any]
-    } else {
-        dict["calendar"] = NSNull()
-    }
+    // Calendar ID (flat string, not nested object)
+    dict["calendar_id"] = event.calendar?.calendarIdentifier ?? ""
 
-    dict["location"] = serializeLocation(event)
+    // Location — spec requires string|null, not structured object
+    if let loc = event.structuredLocation?.title ?? event.location, !loc.isEmpty {
+        dict["location"] = loc
+    } else {
+        dict["location"] = NSNull()
+    }
+    // Backend-specific extra: structured location with coordinates
+    dict["location_detail"] = serializeLocation(event)
+
     dict["url"] = nullable(event.url?.absoluteString)
-    dict["notes"] = nullable(event.notes)
+    dict["description"] = nullable(event.notes)
     dict["availability"] = mapAvailability(event.availability)
 
-    // Travel time — no clean public API, documented as best-effort
-    dict["travelTime"] = NSNull()
+    // Backend-specific extras (allowed by spec)
+    dict["travel_time"] = NSNull()
+    dict["virtual_conference"] = buildVirtualConference(event)
 
-    dict["virtualConference"] = buildVirtualConference(event)
-    dict["participants"] = serializeParticipants(event)
+    // Unified attendees format
+    dict["attendees"] = serializeParticipants(event)
     dict["organizer"] = serializeOrganizer(event)
+
+    // Backend-specific extras
     dict["alarms"] = serializeAlarms(event)
-    dict["recurrence"] = serializeRecurrence(event)
-    dict["isDetached"] = event.isDetached
-    dict["occurrenceDate"] = outputFormatter.string(from: event.occurrenceDate)
-    dict["createdDate"] = formatDate(event.creationDate)
-    dict["lastModifiedDate"] = formatDate(event.lastModifiedDate)
+
+    // Recurrence — spec wants just the RRULE string
+    if let rules = event.recurrenceRules, let rule = rules.first {
+        dict["recurrence_rule"] = buildRRuleString(rule)
+    } else {
+        dict["recurrence_rule"] = NSNull()
+    }
+
+    // Backend-specific extras
+    dict["is_detached"] = event.isDetached
+    dict["occurrence_date"] = outputFormatter.string(from: event.occurrenceDate)
+
+    dict["created"] = formatDate(event.creationDate)
+    dict["last_modified"] = formatDate(event.lastModifiedDate)
 
     return dict
 }
@@ -680,17 +689,14 @@ func mapSourceType(_ type: EKSourceType?) -> String {
 
 func serializeCalendar(_ cal: EKCalendar) -> [String: Any] {
     return [
-        "id": cal.calendarIdentifier,
-        "title": cal.title,
+        "calendar_id": cal.calendarIdentifier,
+        "display_name": cal.title,
         "color": hexColor(cal.cgColor),
+        "source": cal.source?.title ?? "Unknown",
+        "read_only": !cal.allowsContentModifications,
+        // Backend-specific extras (allowed by spec)
         "type": mapCalendarType(cal.type),
-        "allowsModify": cal.allowsContentModifications,
-        "subscribed": cal.type == .subscription,
-        "source": [
-            "id": nullable(cal.source?.sourceIdentifier),
-            "title": nullable(cal.source?.title),
-            "type": mapSourceType(cal.source?.sourceType)
-        ] as [String: Any]
+        "subscribed": cal.type == .subscription
     ]
 }
 
@@ -902,7 +908,7 @@ func cmdDelete(store: EKEventStore, args: Args) {
 
     do {
         try store.remove(event, span: span)
-        exitSuccess(["deleted": true, "id": eventId])
+        exitSuccess(["deleted": true, "uid": eventId])
     } catch {
         exitError("backend_error", "Failed to delete event: \(error.localizedDescription)")
     }
@@ -941,7 +947,7 @@ func cmdSearch(store: EKEventStore, args: Args) {
     }.sorted { $0.startDate < $1.startDate }
 
     let serialized = matched.map { serializeEvent($0, detail: detail) }
-    exitSuccess(["events": serialized, "query": query, "count": serialized.count])
+    exitSuccess(["events": serialized])
 }
 
 func cmdAvailability(store: EKEventStore, args: Args) {
