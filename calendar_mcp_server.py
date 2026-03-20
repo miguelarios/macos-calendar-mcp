@@ -78,8 +78,7 @@ def run_cal_tools(*args: str) -> dict:
 
 @mcp.tool()
 def list_calendars() -> dict:
-    """List all available calendars across configured providers. Returns calendar IDs,
-    display names, colors, source accounts, and read-only status."""
+    """List all calendars across all configured providers. Returns provider-prefixed IDs (e.g., Google/Personal)."""
     return run_cal_tools("calendars")
 
 
@@ -90,11 +89,10 @@ def list_events(
     """Query events in a date range. Recurring events are expanded into individual instances.
 
     Args:
-        start: Start date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).
-        end: End date in ISO 8601 format.
-        calendar: Optional calendar ID to filter by.
-        detail_level: "summary" (default) for lightweight output or "full" for
-                      complete detail including attendees, recurrence, etc.
+        start: Start of date range (ISO 8601).
+        end: End of date range (ISO 8601).
+        calendar: Provider-prefixed calendar ID (e.g., Google/Personal). If omitted, queries all calendars.
+        detail_level: Response verbosity (default: summary).
     """
     args = ["events", "--from", start, "--to", end]
     if calendar:
@@ -108,12 +106,11 @@ def list_events(
 
 @mcp.tool()
 def get_today_events(calendar: str = "", detail_level: str = "summary") -> dict:
-    """Get all events for today.
+    """Get all events for today. Convenience wrapper over list_events.
 
     Args:
-        calendar: Optional calendar ID to filter by.
-        detail_level: "summary" (default) for lightweight output or "full" for
-                      complete detail including attendees, recurrence, etc.
+        calendar: Provider-prefixed calendar ID. If omitted, queries all calendars.
+        detail_level: Response verbosity (default: summary).
     """
     args = ["events", "--today"]
     if calendar:
@@ -128,6 +125,7 @@ def get_today_events(calendar: str = "", detail_level: str = "summary") -> dict:
 @mcp.tool()
 def search_events(
     query: str,
+    calendar: str = "",
     start: str = "",
     end: str = "",
     detail_level: str = "summary",
@@ -136,12 +134,14 @@ def search_events(
 
     Args:
         query: Search term.
-        start: Optional start date (defaults to 90 days ago).
-        end: Optional end date (defaults to 90 days ahead).
-        detail_level: "summary" (default) for lightweight output or "full" for
-                      complete detail including attendees, recurrence, etc.
+        calendar: Provider-prefixed calendar ID. If omitted, searches all calendars.
+        start: Range start (ISO 8601). Defaults to 90 days ago.
+        end: Range end (ISO 8601). Defaults to 90 days ahead.
+        detail_level: Response verbosity (default: summary).
     """
     args = ["search", "--query", query]
+    if calendar:
+        args.extend(["--calendar", calendar])
     if start:
         args.extend(["--from", start])
     if end:
@@ -155,21 +155,21 @@ def search_events(
 
 @mcp.tool()
 def get_event(calendar: str, uid: str) -> dict:
-    """Get full details of a single event.
+    """Get full details of a single event by calendar and UID.
 
     Args:
-        calendar: Calendar ID (required by spec; this backend ignores it — EventKit IDs are global).
-        uid: Event identifier.
+        calendar: Provider-prefixed calendar ID.
+        uid: Event UID.
     """
     return run_cal_tools("event", "--id", uid)
 
 
 @mcp.tool()
 def create_event(
+    calendar: str,
     title: str,
     start: str,
     end: str,
-    calendar: str = "",
     all_day: bool = False,
     location: str = "",
     description: str = "",
@@ -178,15 +178,14 @@ def create_event(
     """Create a new calendar event.
 
     Args:
+        calendar: Provider-prefixed calendar ID.
         title: Event title.
-        start: Start date/time in ISO 8601 format.
-        end: End date/time in ISO 8601 format.
-        calendar: Optional target calendar name (uses system default if omitted).
-        all_day: Whether this is an all-day event (default False).
-        location: Optional event location.
-        description: Optional event description.
-        attendees: Optional list of attendees, each with 'email' and optional 'name'
-                   (not yet supported — raises error if provided).
+        start: Start time (ISO 8601).
+        end: End time (ISO 8601).
+        all_day: All-day event flag (default: false).
+        location: Event location.
+        description: Event description.
+        attendees: List of attendees (not yet supported — raises error if provided).
     """
     if attendees:
         raise ToolError(
@@ -216,19 +215,19 @@ def update_event(
     attendees: list[dict] | None = None,
     span: str = "this",
 ) -> dict:
-    """Update an existing calendar event. Only provided fields are changed.
+    """Update an existing event. Only provided fields are changed.
 
     Args:
-        calendar: Calendar ID (required by spec; can move event to different calendar).
-        uid: Event identifier.
-        title: New title (leave empty to keep current).
-        start: New start date/time in ISO 8601 format (leave empty to keep current).
-        end: New end date/time in ISO 8601 format (leave empty to keep current).
-        all_day: Set all-day flag (omit to keep current).
-        location: New location (leave empty to keep current).
-        description: New description (leave empty to keep current).
-        attendees: New attendee list (not yet supported — raises error if provided).
-        span: For recurring events: "this" (default), "future", or "all".
+        calendar: Provider-prefixed calendar ID.
+        uid: Event UID to update.
+        title: New event title.
+        start: New start time (ISO 8601).
+        end: New end time (ISO 8601).
+        all_day: All-day event flag.
+        location: New location.
+        description: New description.
+        attendees: New attendee list (replaces existing; not yet supported — raises error if provided).
+        span: Recurring event scope (default: this).
     """
     if attendees:
         raise ToolError(
@@ -256,14 +255,12 @@ def update_event(
 
 @mcp.tool()
 def delete_event(calendar: str, uid: str, span: str = "all") -> dict:
-    """Delete a calendar event.
+    """Delete a calendar event by UID.
 
     Args:
-        calendar: Calendar ID (required by spec; this backend ignores it).
-        uid: Event identifier.
-        span: For recurring events: "all" (default) deletes entire series,
-              "this" deletes only this occurrence, "future" deletes this
-              and all future occurrences.
+        calendar: Provider-prefixed calendar ID.
+        uid: Event UID to delete.
+        span: Recurring event scope (default: all).
     """
     args = ["delete", "--id", uid]
     if span in ("this", "future"):
@@ -285,21 +282,18 @@ def find_free_slots(
     include_all_day_as_busy: bool = False,
     ignore_tentative: bool = False,
 ) -> dict:
-    """Find available time slots across calendars.
-
-    Returns free slots as full-length gaps (not chunked). A 2-hour free block
-    returns as one slot; the agent can propose specific times within it.
+    """Find available time slots across specified calendars. Returns free windows matching the requested duration.
 
     Args:
-        start: Start date in ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).
-        end: End date in ISO 8601 format.
+        start: Start of search range (ISO 8601).
+        end: End of search range (ISO 8601).
         duration: Minimum slot duration in minutes.
-        calendars: Calendar IDs to check (default: all). Takes priority over exclude_calendars.
-        preferred_start: Earliest time of day to consider (HH:MM, default "08:00").
-        preferred_end: Latest time of day to consider (HH:MM, default "17:00").
-        exclude_calendars: Calendar names to skip (ignored if calendars is set).
-        include_all_day_as_busy: Treat all-day events as busy (default False).
-        ignore_tentative: Treat tentative events as free (default False).
+        calendars: Provider-prefixed calendar IDs to check availability against. If omitted, uses all calendars.
+        preferred_start: Preferred earliest time (HH:MM, e.g., 08:00).
+        preferred_end: Preferred latest time (HH:MM, e.g., 17:00).
+        exclude_calendars: Calendar IDs to exclude from busy time calculation.
+        include_all_day_as_busy: Treat all-day events as busy (default: false).
+        ignore_tentative: If true, tentative events don't block slots (default: false).
     """
     args = ["availability", "--from", start, "--to", end, "--duration", str(duration)]
     if calendars:
@@ -320,12 +314,11 @@ def create_events_batch(
     calendar: str,
     events: list[dict],
 ) -> dict:
-    """Create multiple events in a single call.
+    """Create multiple events at once. Returns created event count.
 
     Args:
-        calendar: Target calendar name.
-        events: Array of event objects. Each must have 'title', 'start', 'end'.
-                Optional: 'all_day', 'location', 'description', 'attendees'.
+        calendar: Provider-prefixed calendar ID.
+        events: Array of events to create.
     """
     created = []
     errors = []
@@ -361,11 +354,11 @@ def create_events_batch(
 
 @mcp.tool()
 def import_ics(calendar: str, ics_content: str) -> dict:
-    """Import events from raw iCalendar (.ics) content.
+    """Import events from iCalendar (.ics) content into a calendar.
 
     Args:
-        calendar: Target calendar name.
-        ics_content: Raw iCalendar content (RFC 5545).
+        calendar: Provider-prefixed calendar ID.
+        ics_content: Raw iCalendar content string.
     """
     raise ToolError(
         json.dumps({"error": "not_implemented", "message": "import_ics is not yet supported by this backend."})
@@ -385,8 +378,8 @@ def get_upcoming_events(
 
     Args:
         days: Number of days to look ahead (default 7).
-        calendar: Optional calendar ID to filter by.
-        detail_level: "summary" (default) or "full".
+        calendar: Provider-prefixed calendar ID. If omitted, queries all calendars.
+        detail_level: Response verbosity (default: summary).
     """
     args = ["events", "--days", str(max(1, days))]
     if calendar:
@@ -406,8 +399,8 @@ def get_past_events(
 
     Args:
         days: Number of days to look back (default 30).
-        calendar: Optional calendar ID to filter by.
-        detail_level: "summary" (default) or "full".
+        calendar: Provider-prefixed calendar ID. If omitted, queries all calendars.
+        detail_level: Response verbosity (default: summary).
     """
     args = ["events", "--past-days", str(max(1, days))]
     if calendar:

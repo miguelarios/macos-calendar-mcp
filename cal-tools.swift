@@ -528,7 +528,7 @@ func serializeEvent(_ event: EKEvent, detail: DetailLevel = .full) -> [String: A
             "end": outputFormatter.string(from: event.endDate),
             "all_day": event.isAllDay,
             "status": mapEventStatus(event.status),
-            "calendar_id": event.calendar?.calendarIdentifier ?? "",
+            "calendar_id": event.calendar.map { calendarId($0) } ?? "",
             "is_recurring": event.hasRecurrenceRules
         ]
         if let loc = event.structuredLocation?.title ?? event.location, !loc.isEmpty {
@@ -550,8 +550,8 @@ func serializeEvent(_ event: EKEvent, detail: DetailLevel = .full) -> [String: A
         "is_recurring": event.hasRecurrenceRules
     ]
 
-    // Calendar ID (flat string, not nested object)
-    dict["calendar_id"] = event.calendar?.calendarIdentifier ?? ""
+    // Calendar ID as source/title (e.g., "Google/Personal")
+    dict["calendar_id"] = event.calendar.map { calendarId($0) } ?? ""
 
     // Location — spec requires string|null, not structured object
     if let loc = event.structuredLocation?.title ?? event.location, !loc.isEmpty {
@@ -620,9 +620,14 @@ func mapSourceType(_ type: EKSourceType?) -> String {
     }
 }
 
+func calendarId(_ cal: EKCalendar) -> String {
+    let source = cal.source?.title ?? "Unknown"
+    return "\(source)/\(cal.title)"
+}
+
 func serializeCalendar(_ cal: EKCalendar) -> [String: Any] {
     return [
-        "calendar_id": cal.calendarIdentifier,
+        "calendar_id": calendarId(cal),
         "display_name": cal.title,
         "color": hexColor(cal.cgColor),
         "source": cal.source?.title ?? "Unknown",
@@ -673,7 +678,21 @@ class Args {
 
 func findCalendar(_ store: EKEventStore, _ nameOrId: String) -> EKCalendar? {
     let all = store.calendars(for: .event)
-    // Try matching by calendarIdentifier first (exact match)
+    // Try source/title format first (e.g., "Google/Personal")
+    if nameOrId.contains("/") {
+        let parts = nameOrId.split(separator: "/", maxSplits: 1)
+        if parts.count == 2 {
+            let sourceName = String(parts[0]).lowercased()
+            let calTitle = String(parts[1]).lowercased()
+            if let cal = all.first(where: {
+                ($0.source?.title ?? "").lowercased() == sourceName &&
+                $0.title.lowercased() == calTitle
+            }) {
+                return cal
+            }
+        }
+    }
+    // Fall back to matching by calendarIdentifier (exact match)
     if let cal = all.first(where: { $0.calendarIdentifier == nameOrId }) {
         return cal
     }
@@ -683,7 +702,20 @@ func findCalendar(_ store: EKEventStore, _ nameOrId: String) -> EKCalendar? {
 
 func findCalendars(_ store: EKEventStore, _ nameOrId: String) -> [EKCalendar] {
     let all = store.calendars(for: .event)
-    // Try matching by calendarIdentifier first
+    // Try source/title format first (e.g., "Google/Personal")
+    if nameOrId.contains("/") {
+        let parts = nameOrId.split(separator: "/", maxSplits: 1)
+        if parts.count == 2 {
+            let sourceName = String(parts[0]).lowercased()
+            let calTitle = String(parts[1]).lowercased()
+            let matched = all.filter {
+                ($0.source?.title ?? "").lowercased() == sourceName &&
+                $0.title.lowercased() == calTitle
+            }
+            if !matched.isEmpty { return matched }
+        }
+    }
+    // Fall back to matching by calendarIdentifier
     if let cal = all.first(where: { $0.calendarIdentifier == nameOrId }) {
         return [cal]
     }
@@ -896,8 +928,17 @@ func cmdSearch(store: EKEventStore, args: Args) {
         toDate = Calendar.current.date(byAdding: .day, value: 90, to: now)!
     }
 
+    var calendars: [EKCalendar]? = nil
+    if let calName = args.value("calendar") {
+        let matched = findCalendars(store, calName)
+        if matched.isEmpty {
+            exitError("not_found", "Calendar '\(calName)' not found. Use 'cal-tools calendars' to list available calendars.")
+        }
+        calendars = matched
+    }
+
     let detail = args.detailLevel
-    let predicate = store.predicateForEvents(withStart: fromDate, end: toDate, calendars: nil)
+    let predicate = store.predicateForEvents(withStart: fromDate, end: toDate, calendars: calendars)
     let allEvents = store.events(matching: predicate)
     let lowerQuery = query.lowercased()
     let matched = allEvents.filter { event in
