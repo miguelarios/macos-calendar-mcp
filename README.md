@@ -100,19 +100,170 @@ extensions:
 
 ## Available Tools
 
-| Tool | Description |
-|------|-------------|
-| `list_calendars` | List all macOS calendars |
-| `get_events` | Get events in a date range |
-| `get_today_events` | Today's events |
-| `get_upcoming_events` | Events for next N days |
-| `get_past_events` | Events from past N days |
-| `search_events` | Search by keyword in title/notes/location |
-| `get_event` | Get a single event by ID |
-| `create_event` | Create a new event |
-| `update_event` | Update an existing event |
-| `delete_event` | Delete an event |
-| `find_free_slots` | Find available time slots across calendars |
+### `list_calendars`
+
+List all calendars across all configured providers. Returns provider-prefixed IDs (e.g., `Google/Personal`).
+
+*No parameters.*
+
+---
+
+### `list_events`
+
+Query events in a date range. Recurring events are expanded into individual instances.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `start` | string | yes | | Start of date range (ISO 8601) |
+| `end` | string | yes | | End of date range (ISO 8601) |
+| `calendar` | string | no | all | Provider-prefixed calendar ID (e.g., `Google/Personal`) |
+| `detail_level` | string | no | `summary` | Response verbosity: `summary` or `full` |
+
+---
+
+### `get_today_events`
+
+Get all events for today. Convenience wrapper over `list_events`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `calendar` | string | no | all | Provider-prefixed calendar ID |
+| `detail_level` | string | no | `summary` | Response verbosity: `summary` or `full` |
+
+---
+
+### `get_upcoming_events`
+
+Get events for the next N days (including today).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `days` | int | no | `7` | Number of days to look ahead |
+| `calendar` | string | no | all | Provider-prefixed calendar ID |
+| `detail_level` | string | no | `summary` | Response verbosity: `summary` or `full` |
+
+---
+
+### `get_past_events`
+
+Get events from the past N days (up to and including today).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `days` | int | no | `30` | Number of days to look back |
+| `calendar` | string | no | all | Provider-prefixed calendar ID |
+| `detail_level` | string | no | `summary` | Response verbosity: `summary` or `full` |
+
+---
+
+### `search_events`
+
+Keyword search across event title, description, and location.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | yes | | Search term |
+| `calendar` | string | no | all | Provider-prefixed calendar ID |
+| `start` | string | no | 90 days ago | Range start (ISO 8601) |
+| `end` | string | no | 90 days ahead | Range end (ISO 8601) |
+| `detail_level` | string | no | `summary` | Response verbosity: `summary` or `full` |
+
+---
+
+### `get_event`
+
+Get full details of a single event by calendar and UID.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `calendar` | string | yes | Provider-prefixed calendar ID |
+| `uid` | string | yes | Event UID |
+
+---
+
+### `create_event`
+
+Create a new calendar event.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `calendar` | string | yes | | Provider-prefixed calendar ID |
+| `title` | string | yes | | Event title |
+| `start` | string | yes | | Start time (ISO 8601) |
+| `end` | string | yes | | End time (ISO 8601) |
+| `all_day` | bool | no | `false` | All-day event flag |
+| `location` | string | no | | Event location |
+| `description` | string | no | | Event description |
+
+---
+
+### `update_event`
+
+Update an existing event. Only provided fields are changed.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `calendar` | string | yes | | Provider-prefixed calendar ID |
+| `uid` | string | yes | | Event UID to update |
+| `title` | string | no | | New event title |
+| `start` | string | no | | New start time (ISO 8601) |
+| `end` | string | no | | New end time (ISO 8601) |
+| `all_day` | bool | no | | All-day event flag |
+| `location` | string | no | | New location |
+| `description` | string | no | | New description |
+| `span` | string | no | `this` | Recurring event scope: `this`, `future`, or `all` |
+
+---
+
+### `delete_event`
+
+Delete a calendar event by UID.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `calendar` | string | yes | | Provider-prefixed calendar ID |
+| `uid` | string | yes | | Event UID to delete |
+| `span` | string | no | `all` | Recurring event scope: `this`, `future`, or `all` |
+
+---
+
+### `find_free_slots`
+
+Find available time slots across specified calendars. Returns free windows matching the requested duration.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `start` | string | yes | | Start of search range (ISO 8601) |
+| `end` | string | yes | | End of search range (ISO 8601) |
+| `duration` | int | yes | | Minimum slot duration in minutes |
+| `calendars` | list[string] | no | all | Calendar IDs to check availability against |
+| `preferred_start` | string | no | `08:00` | Preferred earliest time (HH:MM) |
+| `preferred_end` | string | no | `17:00` | Preferred latest time (HH:MM) |
+| `exclude_calendars` | list[string] | no | | Calendar IDs to exclude from busy time |
+| `include_all_day_as_busy` | bool | no | `false` | Treat all-day events as busy |
+| `ignore_tentative` | bool | no | `false` | Tentative events don't block slots |
+
+---
+
+### `create_events_batch`
+
+Create multiple events at once. Returns created event count and any errors.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `calendar` | string | yes | Provider-prefixed calendar ID |
+| `events` | list[object] | yes | Array of event objects (each with `title`, `start`, `end`, and optional `location`, `description`, `all_day`) |
+
+---
+
+### `import_ics`
+
+Import events from iCalendar (.ics) content into a calendar. **Not yet implemented.**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `calendar` | string | yes | Provider-prefixed calendar ID |
+| `ics_content` | string | yes | Raw iCalendar content string |
 
 ## Using cal-tools Directly
 
@@ -143,15 +294,19 @@ cal-tools create \
   --start "2026-02-15T10:00:00" \
   --end "2026-02-15T11:00:00" \
   --calendar "Work" \
-  --location "Room 4"
+  --location "Room 4" \
+  --description "Quarterly sync"
 
 # Update an event
 cal-tools update --id "EVENT_ID" --title "New Title"
 
-# Delete an event
+# Delete an event (default: all occurrences if recurring)
 cal-tools delete --id "EVENT_ID"
 
-# Delete this and all future occurrences of a recurring event
+# Delete only this occurrence of a recurring event
+cal-tools delete --id "EVENT_ID" --span this
+
+# Delete this and all future occurrences
 cal-tools delete --id "EVENT_ID" --span future
 
 # Find free 30-minute slots
@@ -168,13 +323,25 @@ All output is JSON. Errors go to stderr with a non-zero exit code.
 | `CAL_TOOLS_PATH` | `~/.local/bin/cal-tools` | Path to the compiled Swift binary |
 | `CALENDAR_MCP_PORT` | `9876` | Port for the MCP server |
 
+## Managing the Server
+
+```bash
+macos-calendar-mcp status    # Check if server is running
+macos-calendar-mcp start     # Start (load) the LaunchAgent
+macos-calendar-mcp stop      # Stop (unload) the LaunchAgent
+macos-calendar-mcp restart   # Restart the LaunchAgent
+macos-calendar-mcp logs      # Tail recent stdout/stderr logs
+```
+
 ## File Layout
 
 ```
 macos-calendar-mcp/
 ├── cal-tools.swift              # Swift CLI — all EventKit operations
 ├── calendar_mcp_server.py       # FastMCP server — MCP protocol layer
-├── com.local.calendar-mcp.plist  # LaunchAgent template
+├── calendar-mcp-server.sh       # LaunchAgent wrapper script
+├── macos-calendar-mcp.sh        # CLI for status/start/stop/restart/logs
+├── com.local.calendar-mcp.plist # LaunchAgent template
 ├── install.sh                   # Compile, install, and start
 ├── uninstall.sh                 # Stop and remove everything
 └── README.md
@@ -219,4 +386,4 @@ After installation, you'll see two entries in System Settings:
 - If recompiled to a different path, macOS will re-prompt for calendar access.
 - The server binds to `127.0.0.1` only — never exposed to the network.
 - LaunchAgent plists don't expand `~` — the install script handles this.
-- For recurring events, `update` and `delete` accept `--span future` to affect all future occurrences (default is only the current occurrence).
+- For recurring events, `update` and `delete` accept `--span` with values `this` (single occurrence), `future` (this and all future), or `all` (every occurrence). `update` defaults to `this`; `delete` defaults to `all`.
