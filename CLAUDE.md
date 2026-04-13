@@ -50,9 +50,13 @@ cal-tools create --title "Test" --start "2025-01-15T10:00:00" --end "2025-01-15T
 cal-tools availability --from 2026-03-09 --to 2026-03-11 --duration 30 --preferred-start 08:00 --preferred-end 17:00
 ```
 
-### Check server status
+### Manage the server
 ```bash
-macos-calendar-mcp status
+macos-calendar-mcp status    # Check if server is running
+macos-calendar-mcp restart   # Restart the LaunchAgent
+macos-calendar-mcp start     # Start (load) the LaunchAgent
+macos-calendar-mcp stop      # Stop (unload) the LaunchAgent
+macos-calendar-mcp logs      # Tail recent stdout/stderr logs
 ```
 
 ## Installation Layout

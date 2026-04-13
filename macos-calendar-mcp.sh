@@ -35,12 +35,65 @@ cmd_status() {
     fi
 }
 
+cmd_restart() {
+    echo "Restarting Calendar MCP Server..."
+    if [ ! -f "$PLIST" ]; then
+        echo "Error: LaunchAgent plist not found. Run install.sh first."
+        exit 1
+    fi
+    launchctl unload "$PLIST" 2>/dev/null || true
+    launchctl load "$PLIST"
+    echo "Done. Waiting for server..."
+    sleep 4
+    cmd_status
+}
+
+cmd_start() {
+    echo "Starting Calendar MCP Server..."
+    if [ ! -f "$PLIST" ]; then
+        echo "Error: LaunchAgent plist not found. Run install.sh first."
+        exit 1
+    fi
+    launchctl load "$PLIST" 2>/dev/null
+    echo "Done. Waiting for server..."
+    sleep 4
+    cmd_status
+}
+
+cmd_stop() {
+    echo "Stopping Calendar MCP Server..."
+    launchctl unload "$PLIST" 2>/dev/null || true
+    echo "Done."
+}
+
+cmd_logs() {
+    local log_dir
+    log_dir="$HOME/.local/share/calendar-mcp/logs"
+    echo "=== stderr (last 20 lines) ==="
+    tail -20 "$log_dir/stderr.log" 2>/dev/null || echo "(no stderr log)"
+    echo ""
+    echo "=== stdout (last 20 lines) ==="
+    tail -20 "$log_dir/stdout.log" 2>/dev/null || echo "(no stdout log)"
+}
+
 case "${1:-status}" in
     status)
         cmd_status
         ;;
+    restart)
+        cmd_restart
+        ;;
+    start)
+        cmd_start
+        ;;
+    stop)
+        cmd_stop
+        ;;
+    logs)
+        cmd_logs
+        ;;
     *)
-        echo "Usage: macos-calendar-mcp [status]"
+        echo "Usage: macos-calendar-mcp [status|start|stop|restart|logs]"
         exit 1
         ;;
 esac
