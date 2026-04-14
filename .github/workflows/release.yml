@@ -1,0 +1,80 @@
+name: Release and Update Homebrew
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
+
+      - name: Compute tarball sha256
+        id: sha
+        run: |
+          TAG="${{ github.ref_name }}"
+          URL="https://github.com/miguelarios/macos-calendar-mcp/archive/refs/tags/${TAG}.tar.gz"
+
+          # Retry up to 3 times — GitHub may not have the tarball ready immediately
+          for i in 1 2 3; do
+            HTTP_CODE=$(curl -sL -o tarball.tar.gz -w "%{http_code}" "$URL")
+            if [ "$HTTP_CODE" = "200" ]; then
+              break
+            fi
+            echo "Attempt $i: got HTTP $HTTP_CODE, retrying in 10s..."
+            sleep 10
+          done
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Failed to download tarball after 3 attempts (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+
+          SHA=$(shasum -a 256 tarball.tar.gz | awk '{print $1}')
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Tarball sha256: $SHA"
+
+      - name: Open PR on homebrew-tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          SHA="${{ steps.sha.outputs.sha256 }}"
+          BRANCH="update-macos-calendar-mcp-${VERSION}"
+
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/miguelarios/homebrew-tap.git" tap
+          cd tap
+
+          git checkout -b "$BRANCH"
+
+          FORMULA="Formula/macos-calendar-mcp.rb"
+          sed -i "s|url \".*\"|url \"https://github.com/miguelarios/macos-calendar-mcp/archive/refs/tags/${TAG}.tar.gz\"|" "$FORMULA"
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA}\"|" "$FORMULA"
+          sed -i "s|version \".*\"|version \"${VERSION}\"|" "$FORMULA"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$FORMULA"
+          git commit -m "macos-calendar-mcp ${VERSION}"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --repo miguelarios/homebrew-tap \
+            --base main \
+            --head "$BRANCH" \
+            --title "macos-calendar-mcp ${VERSION}" \
+            --body "Automated formula update for [v${VERSION}](https://github.com/miguelarios/macos-calendar-mcp/releases/tag/${TAG})."
