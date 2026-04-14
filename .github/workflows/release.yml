@@ -39,7 +39,7 @@ jobs:
 
           HTTP_CODE=000
           for i in 1 2 3; do
-            HTTP_CODE=$(curl -sL --fail-with-body -o tarball.tar.gz -w "%{http_code}" "$URL" || echo 000)
+            HTTP_CODE=$(curl -sL -o tarball.tar.gz -w "%{http_code}" "$URL" || echo 000)
             if [ "$HTTP_CODE" = "200" ]; then
               break
             fi
