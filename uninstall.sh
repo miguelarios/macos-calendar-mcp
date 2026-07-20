@@ -29,14 +29,16 @@ else
     echo "  Not found (already removed)."
 fi
 
-# --- 3. Remove cal-tools binary ---
-echo "[3/4] Removing cal-tools binary..."
-if [ -f "$HOME_DIR/.local/bin/cal-tools" ]; then
-    rm "$HOME_DIR/.local/bin/cal-tools"
-    echo "  Removed: $HOME_DIR/.local/bin/cal-tools"
-else
-    echo "  Not found (already removed)."
-fi
+# --- 3. Remove installed binaries ---
+echo "[3/4] Removing installed binaries..."
+for bin in cal-tools macos-calendar-mcp; do
+    if [ -f "$HOME_DIR/.local/bin/$bin" ]; then
+        rm "$HOME_DIR/.local/bin/$bin"
+        echo "  Removed: $HOME_DIR/.local/bin/$bin"
+    else
+        echo "  Not found (already removed): $HOME_DIR/.local/bin/$bin"
+    fi
+done
 
 # --- 4. Remove MCP server and data ---
 echo "[4/4] Removing MCP server files..."
@@ -50,7 +52,4 @@ fi
 
 echo ""
 echo "==> Uninstall complete."
-echo ""
-echo "Note: The fastmcp Python package was not removed."
-echo "  To remove it: pip3 uninstall fastmcp"
 echo ""

@@ -36,13 +36,6 @@ let isoFormatter: ISO8601DateFormatter = {
     return f
 }()
 
-let isoFormatterNoTZ: ISO8601DateFormatter = {
-    let f = ISO8601DateFormatter()
-    f.formatOptions = [.withInternetDateTime]
-    f.timeZone = TimeZone.current
-    return f
-}()
-
 let dateOnlyFormatter: DateFormatter = {
     let f = DateFormatter()
     f.dateFormat = "yyyy-MM-dd"
@@ -83,6 +76,16 @@ func parseDate(_ string: String) -> Date? {
     return nil
 }
 
+// A bare date used as a range end means "through the end of that day",
+// otherwise "--from 2026-03-09 --to 2026-03-11" would exclude all of Mar 11.
+func parseEndDate(_ string: String) -> Date? {
+    guard let d = parseDate(string) else { return nil }
+    if string.count == 10, dateOnlyFormatter.date(from: string) != nil {
+        return endOfDay(d)
+    }
+    return d
+}
+
 extension TimeZone {
     func iso8601Offset() -> String {
         let seconds = self.secondsFromGMT()
@@ -111,7 +114,7 @@ func endOfDay(_ date: Date) -> Date {
 
 func timeOfDay(_ string: String, on date: Date) -> Date? {
     let parts = string.split(separator: ":").compactMap { Int($0) }
-    guard parts.count == 2 else { return nil }
+    guard parts.count == 2, (0..<24).contains(parts[0]), (0..<60).contains(parts[1]) else { return nil }
     var comps = Calendar.current.dateComponents([.year, .month, .day], from: date)
     comps.hour = parts[0]
     comps.minute = parts[1]
@@ -124,10 +127,10 @@ func timeOfDay(_ string: String, on date: Date) -> Date? {
 func hexColor(_ cgColor: CGColor?) -> Any {
     guard let color = cgColor else { return NSNull() }
     let ciColor = CIColor(cgColor: color)
-    let r = Int(ciColor.red * 255)
-    let g = Int(ciColor.green * 255)
-    let b = Int(ciColor.blue * 255)
-    return String(format: "#%02X%02X%02X", r, g, b)
+    func channel(_ v: CGFloat) -> Int {
+        return Int((min(max(v, 0), 1) * 255).rounded())
+    }
+    return String(format: "#%02X%02X%02X", channel(ciColor.red), channel(ciColor.green), channel(ciColor.blue))
 }
 
 // MARK: - Virtual Conference Helpers
@@ -229,13 +232,17 @@ func mapParticipantType(_ type: EKParticipantType) -> String {
     }
 }
 
+func participantEmail(_ participant: EKParticipant) -> String {
+    let s = participant.url.absoluteString
+    return s.hasPrefix("mailto:") ? String(s.dropFirst("mailto:".count)) : s
+}
+
 func serializeParticipants(_ event: EKEvent) -> [[String: Any]] {
     guard let attendees = event.attendees else { return [] }
     return attendees.map { attendee in
         [
             "name": nullable(attendee.name),
-            "email": attendee.url.absoluteString
-                .replacingOccurrences(of: "mailto:", with: ""),
+            "email": participantEmail(attendee),
             "status": mapParticipantStatus(attendee.participantStatus),
             "role": mapParticipantRole(attendee.participantRole),
             // Backend-specific extras
@@ -249,8 +256,7 @@ func serializeOrganizer(_ event: EKEvent) -> Any {
     guard let organizer = event.organizer else { return NSNull() }
     return [
         "name": nullable(organizer.name),
-        "email": organizer.url.absoluteString
-            .replacingOccurrences(of: "mailto:", with: ""),
+        "email": participantEmail(organizer),
         // Backend-specific extra
         "is_current_user": organizer.isCurrentUser
     ] as [String: Any]
@@ -749,13 +755,17 @@ func cmdEvents(store: EKEventStore, args: Args) {
         guard let from = parseDate(fromStr) else {
             exitError("validation_error", "Invalid --from date: \(fromStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
         }
-        guard let to = parseDate(toStr) else {
+        guard let to = parseEndDate(toStr) else {
             exitError("validation_error", "Invalid --to date: \(toStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
         }
         startDate = from
         endDate = to
     } else {
         exitError("validation_error", "Provide a date range: --today, --days N, --past-days N, or --from/--to dates.")
+    }
+
+    if startDate > endDate {
+        exitError("validation_error", "--from date must not be after --to date.")
     }
 
     var calendars: [EKCalendar]? = nil
@@ -800,6 +810,9 @@ func cmdCreate(store: EKEventStore, args: Args) {
     }
     guard let endDate = parseDate(endStr) else {
         exitError("validation_error", "Invalid --end date: \(endStr)")
+    }
+    if endDate < startDate {
+        exitError("validation_error", "--end must not be before --start.")
     }
 
     let event = EKEvent(eventStore: store)
@@ -865,6 +878,10 @@ func cmdUpdate(store: EKEventStore, args: Args) {
         }
     }
 
+    if let s = event.startDate, let e = event.endDate, e < s {
+        exitError("validation_error", "Event end must not be before start.")
+    }
+
     var span: EKSpan = .thisEvent
     if let spanStr = args.value("span") {
         switch spanStr {
@@ -916,16 +933,26 @@ func cmdSearch(store: EKEventStore, args: Args) {
     let fromDate: Date
     let toDate: Date
 
-    if let fromStr = args.value("from"), let d = parseDate(fromStr) {
+    if let fromStr = args.value("from") {
+        guard let d = parseDate(fromStr) else {
+            exitError("validation_error", "Invalid --from date: \(fromStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
+        }
         fromDate = d
     } else {
         fromDate = Calendar.current.date(byAdding: .day, value: -90, to: now)!
     }
 
-    if let toStr = args.value("to"), let d = parseDate(toStr) {
+    if let toStr = args.value("to") {
+        guard let d = parseEndDate(toStr) else {
+            exitError("validation_error", "Invalid --to date: \(toStr). Use ISO 8601 format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).")
+        }
         toDate = d
     } else {
         toDate = Calendar.current.date(byAdding: .day, value: 90, to: now)!
+    }
+
+    if fromDate > toDate {
+        exitError("validation_error", "--from date must not be after --to date.")
     }
 
     var calendars: [EKCalendar]? = nil
@@ -962,6 +989,9 @@ func cmdAvailability(store: EKEventStore, args: Args) {
     guard let toDate = parseDate(toStr) else {
         exitError("validation_error", "Invalid --to date: \(toStr)")
     }
+    if fromDate > toDate {
+        exitError("validation_error", "--from date must not be after --to date.")
+    }
     guard let durationStr = args.value("duration"), let duration = Int(durationStr), duration > 0 else {
         exitError("validation_error", "Missing or invalid --duration parameter (positive integer minutes).")
     }
@@ -987,19 +1017,23 @@ func cmdAvailability(store: EKEventStore, args: Args) {
         }
     }
 
-    // Filter calendars: include list takes priority over exclude list
+    // Filter calendars: include list takes priority over exclude list.
+    // Names match the "Source/Title" ID, bare title, or calendarIdentifier.
     let allCalendars = store.calendars(for: .event)
+    func matches(_ cal: EKCalendar, _ names: Set<String>) -> Bool {
+        return names.contains(calendarId(cal).lowercased()) ||
+            names.contains(cal.title.lowercased()) ||
+            names.contains(cal.calendarIdentifier.lowercased())
+    }
     let calendars: [EKCalendar]?
     if !includedNames.isEmpty {
-        calendars = allCalendars.filter {
-            includedNames.contains($0.title.lowercased()) ||
-            includedNames.contains($0.calendarIdentifier.lowercased())
+        let matched = allCalendars.filter { matches($0, includedNames) }
+        if matched.isEmpty {
+            exitError("not_found", "No calendars matched: \(includedNames.sorted().joined(separator: ", ")). Use 'cal-tools calendars' to list available calendars.")
         }
+        calendars = matched
     } else if !excludedNames.isEmpty {
-        calendars = allCalendars.filter {
-            !excludedNames.contains($0.title.lowercased()) &&
-            !excludedNames.contains($0.calendarIdentifier.lowercased())
-        }
+        calendars = allCalendars.filter { !matches($0, excludedNames) }
     } else {
         calendars = nil
     }
@@ -1012,6 +1046,13 @@ func cmdAvailability(store: EKEventStore, args: Args) {
     let busyEvents = allEvents.filter { event in
         // Skip all-day events unless explicitly included
         if event.isAllDay && !includeAllDayAsBusy { return false }
+
+        // Cancelled events and meetings the user declined don't block time
+        if event.status == .canceled { return false }
+        if let me = event.attendees?.first(where: { $0.isCurrentUser }),
+           me.participantStatus == .declined {
+            return false
+        }
 
         switch event.availability {
         case .free:
@@ -1041,8 +1082,7 @@ func cmdAvailability(store: EKEventStore, args: Args) {
         // Collect busy intervals overlapping this day's window
         var busyIntervals: [(start: Date, end: Date)] = []
         for event in busyEvents {
-            let evStart = event.startDate!
-            let evEnd = event.endDate!
+            guard let evStart = event.startDate, let evEnd = event.endDate else { continue }
             // Clip to window
             let clippedStart = max(evStart, windowStart)
             let clippedEnd = min(evEnd, windowEnd)

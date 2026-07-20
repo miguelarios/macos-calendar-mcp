@@ -71,6 +71,11 @@ def run_cal_tools(*args: str) -> dict:
         )
 
 
+def detail_args(detail_level: str) -> list[str]:
+    """Map a detail_level parameter to cal-tools --detail arguments."""
+    return ["--detail", "full" if detail_level == "full" else "summary"]
+
+
 # ---------------------------------------------------------------------------
 # MCP Tools
 # ---------------------------------------------------------------------------
@@ -97,10 +102,7 @@ def list_events(
     args = ["events", "--from", start, "--to", end]
     if calendar:
         args.extend(["--calendar", calendar])
-    if detail_level == "full":
-        args.extend(["--detail", "full"])
-    else:
-        args.extend(["--detail", "summary"])
+    args.extend(detail_args(detail_level))
     return run_cal_tools(*args)
 
 
@@ -115,10 +117,7 @@ def get_today_events(calendar: str = "", detail_level: str = "summary") -> dict:
     args = ["events", "--today"]
     if calendar:
         args.extend(["--calendar", calendar])
-    if detail_level == "full":
-        args.extend(["--detail", "full"])
-    else:
-        args.extend(["--detail", "summary"])
+    args.extend(detail_args(detail_level))
     return run_cal_tools(*args)
 
 
@@ -146,10 +145,7 @@ def search_events(
         args.extend(["--from", start])
     if end:
         args.extend(["--to", end])
-    if detail_level == "full":
-        args.extend(["--detail", "full"])
-    else:
-        args.extend(["--detail", "summary"])
+    args.extend(detail_args(detail_level))
     return run_cal_tools(*args)
 
 
@@ -329,12 +325,12 @@ def create_events_batch(
         if not title or not ev_start or not ev_end:
             errors.append({"index": i, "error": "validation_error", "message": "Event must have 'title', 'start', and 'end'."})
             continue
-        args = ["create", "--title", title, "--start", ev_start, "--end", ev_end]
+        args = ["create", "--title", str(title), "--start", str(ev_start), "--end", str(ev_end)]
         args.extend(["--calendar", calendar])
         if ev.get("location"):
-            args.extend(["--location", ev["location"]])
+            args.extend(["--location", str(ev["location"])])
         if ev.get("description"):
-            args.extend(["--description", ev["description"]])
+            args.extend(["--description", str(ev["description"])])
         args.extend(["--all-day", str(ev.get("all_day", False)).lower()])
         try:
             result = run_cal_tools(*args)
@@ -384,10 +380,7 @@ def get_upcoming_events(
     args = ["events", "--days", str(max(1, days))]
     if calendar:
         args.extend(["--calendar", calendar])
-    if detail_level == "full":
-        args.extend(["--detail", "full"])
-    else:
-        args.extend(["--detail", "summary"])
+    args.extend(detail_args(detail_level))
     return run_cal_tools(*args)
 
 
@@ -405,10 +398,7 @@ def get_past_events(
     args = ["events", "--past-days", str(max(1, days))]
     if calendar:
         args.extend(["--calendar", calendar])
-    if detail_level == "full":
-        args.extend(["--detail", "full"])
-    else:
-        args.extend(["--detail", "summary"])
+    args.extend(detail_args(detail_level))
     return run_cal_tools(*args)
 
 

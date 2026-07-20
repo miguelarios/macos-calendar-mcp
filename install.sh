@@ -81,9 +81,17 @@ else
     echo "  Grant access in: System Settings > Privacy & Security > Calendars"
 fi
 
-# Check if MCP server is responding
-sleep 2
-if curl -s --max-time 5 "http://127.0.0.1:9876/mcp" >/dev/null 2>&1; then
+# Check if MCP server is responding (the wrapper script delays startup by a
+# few seconds, so poll instead of checking once)
+SERVER_UP=false
+for _ in $(seq 1 15); do
+    if curl -s --max-time 5 "http://127.0.0.1:9876/mcp" >/dev/null 2>&1; then
+        SERVER_UP=true
+        break
+    fi
+    sleep 1
+done
+if $SERVER_UP; then
     echo "  MCP server: OK (http://127.0.0.1:9876/mcp)"
 else
     echo "  MCP server: Not responding yet. Check logs at:"

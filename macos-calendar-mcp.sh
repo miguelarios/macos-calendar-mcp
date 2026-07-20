@@ -22,10 +22,11 @@ cmd_status() {
     echo ""
 
     # Check if running
-    if launchctl list "$LABEL" &>/dev/null 2>&1; then
+    if launchctl list "$LABEL" &>/dev/null; then
+        # `launchctl list <label>` prints a plist-style dict; extract the PID entry
         local pid
-        pid=$(launchctl list "$LABEL" 2>/dev/null | awk 'NR==2{print $1}')
-        if [ "$pid" != "-" ] && [ -n "$pid" ]; then
+        pid=$(launchctl list "$LABEL" 2>/dev/null | sed -n 's/.*"PID" = \([0-9][0-9]*\);.*/\1/p')
+        if [ -n "$pid" ]; then
             echo "  Status: running (PID $pid)"
         else
             echo "  Status: loaded but not running"
