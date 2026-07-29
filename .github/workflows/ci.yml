@@ -1,15 +1,20 @@
 name: CI
 
 on:
+  # Feature branches are covered by pull_request. Listing them here too would run every
+  # job twice per push and — because macOS runners are scarce — have the duplicates
+  # compete with each other for a runner.
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
+# head_ref is the source branch on pull_request and empty on push, so a PR and a push to
+# main land in distinct groups while repeated pushes to the same PR collapse into one.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
