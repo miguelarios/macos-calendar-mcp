@@ -5,9 +5,13 @@ A FastMCP server that exposes macOS calendar operations via Streamable HTTP tran
 Delegates all EventKit work to the compiled `cal-tools` Swift binary.
 """
 
+import asyncio
+import contextlib
 import json
 import os
 import subprocess
+from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
@@ -18,7 +22,134 @@ CAL_TOOLS = os.environ.get(
     "CAL_TOOLS_PATH", os.path.expanduser("~/.local/bin/cal-tools")
 )
 
-mcp = FastMCP("Calendar")
+# Set CALENDAR_MCP_WATCH=0 to skip the background change watcher entirely.
+WATCH_ENABLED = os.environ.get("CALENDAR_MCP_WATCH", "1") not in ("0", "false", "no")
+
+# Annotation presets. Most of this server is read-only; marking that explicitly lets clients
+# skip confirmation prompts on safe calls and raise them on the two tools that mutate data.
+READ_ONLY = {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}
+ADDITIVE = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
+DESTRUCTIVE = {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False}
+
+
+# ---------------------------------------------------------------------------
+# Calendar change watcher
+# ---------------------------------------------------------------------------
+#
+# `cal-tools watch` observes EventKit's EKEventStoreChanged and streams NDJSON whenever the
+# calendar database changes underneath us — a remote account syncing, an edit in Calendar.app,
+# a write from another process.
+#
+# Ideally this would reach clients as a push notification. It can't yet: the MCP Python SDK
+# hardcodes `subscribe=False` in its resource capabilities (mcp/server/lowlevel/server.py),
+# so FastMCP 3.x cannot serve `resources/subscribe`, and MCP revision 2026-07-28 replaces that
+# mechanism with `subscriptions/listen` — which needs FastMCP 4. Until then we expose the
+# watcher's state as a cheap change token an agent can poll: one tiny read tells it whether a
+# full refetch is warranted, instead of re-pulling every event to find out nothing moved.
+#
+# When `subscriptions/listen` is available, `_change_state` is the value to push; the watcher
+# below does not need to change.
+
+_change_state: dict = {
+    "watching": False,
+    "revision": 0,
+    "last_changed_at": None,
+    "error": None,
+}
+
+
+async def _watch_calendar() -> None:
+    """Run `cal-tools watch` and fold its NDJSON records into `_change_state`.
+
+    Restarts the child with backoff if it dies. This is best-effort: a watcher that cannot
+    start degrades the change token to "always stale", which is correct-but-pessimistic and
+    never blocks the ordinary tools.
+    """
+    backoff = 1.0
+    while True:
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                CAL_TOOLS,
+                "watch",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            assert proc.stdout is not None
+            async for raw in proc.stdout:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                kind = record.get("type")
+                if kind == "watching":
+                    _change_state.update(watching=True, error=None)
+                    backoff = 1.0  # a clean start resets the penalty
+                elif kind == "changed":
+                    _change_state.update(
+                        watching=True,
+                        error=None,
+                        revision=record.get("revision", _change_state["revision"] + 1),
+                        last_changed_at=record.get("at")
+                        or datetime.now(timezone.utc).isoformat(),
+                    )
+
+            # stdout closed: the child exited. Surface why before backing off.
+            stderr = b""
+            if proc.stderr is not None:
+                stderr = await proc.stderr.read()
+            await proc.wait()
+            _change_state.update(
+                watching=False,
+                error=_describe_watch_failure(stderr.decode("utf-8", "replace")),
+            )
+        except asyncio.CancelledError:
+            if proc is not None and proc.returncode is None:
+                proc.terminate()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+            raise
+        except (OSError, FileNotFoundError) as exc:
+            _change_state.update(
+                watching=False, error=f"Failed to start cal-tools watch: {exc}"
+            )
+
+        await asyncio.sleep(backoff)
+        backoff = min(backoff * 2, 60.0)
+
+
+def _describe_watch_failure(stderr: str) -> str:
+    """Turn cal-tools' structured stderr into a human-readable watcher status."""
+    stderr = stderr.strip()
+    if not stderr:
+        return "cal-tools watch exited unexpectedly."
+    try:
+        err = json.loads(stderr)
+    except json.JSONDecodeError:
+        return f"cal-tools watch exited: {stderr[:300]}"
+    return f"{err.get('error', 'backend_error')}: {err.get('message', stderr[:300])}"
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(_server) -> AsyncIterator[None]:
+    if not WATCH_ENABLED:
+        _change_state["error"] = "Watcher disabled via CALENDAR_MCP_WATCH=0."
+        yield
+        return
+
+    task = asyncio.create_task(_watch_calendar())
+    try:
+        yield
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+mcp = FastMCP("Calendar", lifespan=_lifespan)
 
 
 # ---------------------------------------------------------------------------
@@ -76,13 +207,43 @@ def run_cal_tools(*args: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+def _change_token() -> dict:
+    """Current calendar change token. See the watcher notes above."""
+    return dict(_change_state)
+
+
+@mcp.resource(
+    "calendar://changes",
+    name="calendar_changes",
+    description="Change token for the local calendar database. `revision` increments whenever macOS reports a calendar change.",
+    mime_type="application/json",
+)
+def calendar_changes_resource() -> dict:
+    return _change_token()
+
+
+@mcp.tool(annotations=READ_ONLY)
+def get_calendar_change_token() -> dict:
+    """Check whether the calendar has changed without refetching events.
+
+    Returns a `revision` counter that increments whenever macOS reports a change to the
+    calendar database (a remote sync, an edit in Calendar.app, another process writing).
+    Cache this alongside event results and re-read it before trusting them: if `revision` is
+    unchanged, previously fetched events are still current and need not be re-queried.
+
+    `watching` is false when the background watcher isn't running, in which case `revision`
+    is not a reliable staleness signal and `error` explains why.
+    """
+    return _change_token()
+
+
+@mcp.tool(annotations=READ_ONLY)
 def list_calendars() -> dict:
     """List all calendars across all configured providers. Returns provider-prefixed IDs (e.g., Google/Personal)."""
     return run_cal_tools("calendars")
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def list_events(
     start: str, end: str, calendar: str = "", detail_level: str = "summary"
 ) -> dict:
@@ -104,7 +265,7 @@ def list_events(
     return run_cal_tools(*args)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_today_events(calendar: str = "", detail_level: str = "summary") -> dict:
     """Get all events for today. Convenience wrapper over list_events.
 
@@ -122,7 +283,7 @@ def get_today_events(calendar: str = "", detail_level: str = "summary") -> dict:
     return run_cal_tools(*args)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def search_events(
     query: str,
     calendar: str = "",
@@ -153,7 +314,7 @@ def search_events(
     return run_cal_tools(*args)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_event(calendar: str, uid: str) -> dict:
     """Get full details of a single event by calendar and UID.
 
@@ -164,7 +325,7 @@ def get_event(calendar: str, uid: str) -> dict:
     return run_cal_tools("event", "--id", uid)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ADDITIVE)
 def create_event(
     calendar: str,
     title: str,
@@ -202,7 +363,7 @@ def create_event(
     return run_cal_tools(*args)
 
 
-@mcp.tool()
+@mcp.tool(annotations=DESTRUCTIVE)
 def update_event(
     calendar: str,
     uid: str,
@@ -253,7 +414,7 @@ def update_event(
     return run_cal_tools(*args)
 
 
-@mcp.tool()
+@mcp.tool(annotations=DESTRUCTIVE)
 def delete_event(calendar: str, uid: str, span: str = "all") -> dict:
     """Delete a calendar event by UID.
 
@@ -270,7 +431,7 @@ def delete_event(calendar: str, uid: str, span: str = "all") -> dict:
     return run_cal_tools(*args)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def find_free_slots(
     start: str,
     end: str,
@@ -309,7 +470,7 @@ def find_free_slots(
     return run_cal_tools(*args)
 
 
-@mcp.tool()
+@mcp.tool(annotations=ADDITIVE)
 def create_events_batch(
     calendar: str,
     events: list[dict],
@@ -352,7 +513,7 @@ def create_events_batch(
     return result
 
 
-@mcp.tool()
+@mcp.tool(annotations=ADDITIVE)
 def import_ics(calendar: str, ics_content: str) -> dict:
     """Import events from iCalendar (.ics) content into a calendar.
 
@@ -370,7 +531,7 @@ def import_ics(calendar: str, ics_content: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_upcoming_events(
     days: int = 7, calendar: str = "", detail_level: str = "summary"
 ) -> dict:
@@ -391,7 +552,7 @@ def get_upcoming_events(
     return run_cal_tools(*args)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def get_past_events(
     days: int = 30, calendar: str = "", detail_level: str = "summary"
 ) -> dict:

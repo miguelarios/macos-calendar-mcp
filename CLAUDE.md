@@ -48,7 +48,20 @@ cal-tools search --query "standup"
 cal-tools create --title "Test" --start "2025-01-15T10:00:00" --end "2025-01-15T11:00:00"
 cal-tools create --title "Test" --start "2025-01-15T10:00:00" --end "2025-01-15T11:00:00" --description "Meeting notes"
 cal-tools availability --from 2026-03-09 --to 2026-03-11 --duration 30 --preferred-start 08:00 --preferred-end 17:00
+
+# Long-running: streams NDJSON on every EventKit change until killed (Ctrl-C)
+cal-tools watch
 ```
+
+### Run tests
+```bash
+python3 -m venv /tmp/venv && /tmp/venv/bin/pip install 'fastmcp>=3.4.5,<4' pytest
+/tmp/venv/bin/python -m pytest tests/ -v
+```
+
+Tests are platform-independent — they don't need macOS, EventKit, or the compiled binary
+(the watcher tests drive a fake `cal-tools` shell script). The Swift side is compile-checked
+by the macOS job in `.github/workflows/ci.yml`.
 
 ### Manage the server
 ```bash
@@ -76,14 +89,42 @@ macos-calendar-mcp logs      # Tail recent stdout/stderr logs
 |----------|---------|---------|
 | `CAL_TOOLS_PATH` | `~/.local/bin/cal-tools` | Path to Swift binary |
 | `CALENDAR_MCP_PORT` | `9876` | Server port |
+| `CALENDAR_MCP_WATCH` | `1` | Set to `0` to disable the background calendar change watcher |
 
 ## Unified Schema
 
-This server conforms to the Unified Calendar MCP Tool Schema v1.1 — see `docs/unified-calendar-mcp-spec-v1.md`. Tool names, parameter names, and response shapes are standardized across this server and `pim-agents/cal-mcp`.
+This server conforms to the Unified Calendar MCP Tool Schema v1.1. Tool names, parameter
+names, and response shapes are standardized across this server and `pim-agents/cal-mcp`,
+which is where the schema document lives — it is not vendored into this repo.
+
+## MCP Protocol Version
+
+`install.sh` pins `fastmcp>=3.4.5,<4`. FastMCP 4 is the first release to serve MCP revision
+`2026-07-28` and ships breaking changes (server-side sampling/roots removed, 3.x shims
+dropped, SDK camelCase → snake_case). Since this runs as an unattended LaunchAgent, the
+upper bound exists so a 4.0 GA can't land on users during a reinstall. Don't remove it
+casually — bump it deliberately, and use the CI suite to verify.
+
+Deferred until that bump:
+- **`subscriptions/listen`** — server-pushed calendar change notifications. The Swift watcher
+  and `_change_state` already exist; only the push path is missing. The MCP Python SDK
+  hardcodes `subscribe=False` (`mcp/server/lowlevel/server.py`), so 3.x can't serve resource
+  subscriptions at all. Until then, `get_calendar_change_token` exposes the same state for polling.
+- **`ttlMs` / `cacheScope`** on list results — the calendar list is near-static and a good fit
+  for the new `CacheableResult`, but both fields are v4-only.
+- **`stateless_http=True`** — supported in 3.x, but leaving sessions on keeps the door open for
+  the push work above.
 
 ## Architecture Notes
 
-- The Python server is a thin wrapper — all calendar logic lives in the Swift binary.
+- The Python server is a thin wrapper — all calendar logic lives in the Swift binary. The one
+  exception is the change watcher, which owns a long-lived `cal-tools watch` child process.
+- `cal-tools` subcommands are one-shot (run, print JSON, exit) except `watch`, which streams
+  NDJSON until killed and so needs a run loop on the main thread.
+- Error codes from `cal-tools` stderr: `validation_error`, `not_found`, `permission_denied`
+  (TCC calendar access denied — user-fixable), `backend_error`. The Python layer forwards
+  these verbatim and adds `not_implemented`. Keep `permission_denied` distinct from
+  `backend_error`: it's the most common first-run failure and agents branch on it.
 - The plist uses `HOMEDIR` as a placeholder since plist files don't expand `~`. The installer substitutes it with `sed`.
 - Server binds to `127.0.0.1` only (never exposed to network).
 - LaunchAgent auto-restarts the server on crash (`KeepAlive.SuccessfulExit: false`).

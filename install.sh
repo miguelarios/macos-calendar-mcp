@@ -47,7 +47,12 @@ echo "  Installed: $DATA_DIR/calendar_mcp_server.py"
 echo "[4/7] Installing Python dependencies..."
 VENV_DIR="$DATA_DIR/venv"
 python3 -m venv "$VENV_DIR"
-"$VENV_DIR/bin/pip" install --quiet fastmcp
+# Pinned to the 3.x line deliberately. FastMCP 4 is the first release to serve MCP
+# revision 2026-07-28 (sessionless core), and it ships breaking changes: server-side
+# sampling/roots removed, 3.x compat shims dropped, SDK field names camelCase -> snake_case.
+# Without this bound, a 4.0 GA would silently land in every fresh install of an unattended
+# LaunchAgent. Revisit — and bump deliberately — once 4.0 is stable. See README "MCP protocol".
+"$VENV_DIR/bin/pip" install --quiet 'fastmcp>=3.4.5,<4'
 echo "  Installed fastmcp in venv: $VENV_DIR"
 
 # --- 5. Install LaunchAgent plist (expand HOMEDIR placeholder) ---

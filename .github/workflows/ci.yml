@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: Compile cal-tools (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: swiftc --version
+
+      # The binary links EventKit and is what every tool call shells out to, so a compile
+      # break here breaks the whole server. Nothing verified this before.
+      - name: Compile
+        run: swiftc cal-tools.swift -o "$RUNNER_TEMP/cal-tools"
+
+      # No calendar access on a CI runner, so we can only exercise the paths that fail before
+      # EventKit is touched. Arg validation is one of them.
+      - name: Reject unknown subcommands
+        run: |
+          if "$RUNNER_TEMP/cal-tools" definitely-not-a-subcommand 2>"$RUNNER_TEMP/err.json"; then
+            echo "expected a non-zero exit"; exit 1
+          fi
+          cat "$RUNNER_TEMP/err.json"
+          python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$RUNNER_TEMP/err.json"
+
+  python:
+    name: Server tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is FastMCP's floor; 3.13 guards against the other end drifting.
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Installs the same bound install.sh uses. If a FastMCP release breaks the tool
+      # surface or the lifespan API, this is what catches it before users do.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install 'fastmcp>=3.4.5,<4' pytest
+
+      - name: Verify the FastMCP pin still resolves inside 3.x
+        run: |
+          version="$(python -c 'import fastmcp; print(fastmcp.__version__)')"
+          echo "fastmcp $version"
+          case "$version" in
+            3.*) ;;
+            *) echo "::error::Expected FastMCP 3.x, resolved $version. See install.sh."; exit 1 ;;
+          esac
+
+      - name: Run tests
+        run: python -m pytest tests/ -v
+
+  scripts:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax-check
+        run: for f in install.sh uninstall.sh macos-calendar-mcp.sh calendar-mcp-server.sh; do bash -n "$f"; done
+
+      - name: Lint
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck -S warning install.sh uninstall.sh macos-calendar-mcp.sh calendar-mcp-server.sh
+
+      - name: Validate LaunchAgent plist
+        run: python3 -c "import plistlib; plistlib.load(open('com.local.calendar-mcp.plist','rb'))"
