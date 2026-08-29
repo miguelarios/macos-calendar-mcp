@@ -21,6 +21,9 @@ jobs:
   swift:
     name: Compile cal-tools (macOS)
     runs-on: macos-latest
+    # macOS runners can be capacity-constrained. Fail fast rather than inheriting the
+    # 6-hour default and leaving the run pending for the rest of the day.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +48,7 @@ jobs:
   python:
     name: Server tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -79,6 +83,7 @@ jobs:
   scripts:
     name: Shell scripts
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
