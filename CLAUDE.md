@@ -105,15 +105,7 @@ dropped, SDK camelCase → snake_case). Since this runs as an unattended LaunchA
 upper bound exists so a 4.0 GA can't land on users during a reinstall. Don't remove it
 casually — bump it deliberately, and use the CI suite to verify.
 
-Deferred until that bump:
-- **`subscriptions/listen`** — server-pushed calendar change notifications. The Swift watcher
-  and `_change_state` already exist; only the push path is missing. The MCP Python SDK
-  hardcodes `subscribe=False` (`mcp/server/lowlevel/server.py`), so 3.x can't serve resource
-  subscriptions at all. Until then, `get_calendar_change_token` exposes the same state for polling.
-- **`ttlMs` / `cacheScope`** on list results — the calendar list is near-static and a good fit
-  for the new `CacheableResult`, but both fields are v4-only.
-- **`stateless_http=True`** — supported in 3.x, but leaving sessions on keeps the door open for
-  the push work above.
+The migration and the work it unblocks are tracked in issue #4 and its sub-issues, not here.
 
 ## Architecture Notes
 
@@ -121,6 +113,10 @@ Deferred until that bump:
   exception is the change watcher, which owns a long-lived `cal-tools watch` child process.
 - `cal-tools` subcommands are one-shot (run, print JSON, exit) except `watch`, which streams
   NDJSON until killed and so needs a run loop on the main thread.
+- Calendar change notification is polled, not pushed: the MCP Python SDK hardcodes
+  `subscribe=False` (`mcp/server/lowlevel/server.py`), so FastMCP 3.x cannot serve resource
+  subscriptions at all. `get_calendar_change_token` and `calendar://changes` expose the
+  watcher's state instead. This is a constraint, not an oversight — see issue #5.
 - Error codes from `cal-tools` stderr: `validation_error`, `not_found`, `permission_denied`
   (TCC calendar access denied — user-fixable), `backend_error`. The Python layer forwards
   these verbatim and adds `not_implemented`. Keep `permission_denied` distinct from
