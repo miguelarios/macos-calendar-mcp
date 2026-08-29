@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+venv/
+.venv/
+
+# Compiled Swift binary, if built in-tree rather than into ~/.local/bin
+/cal-tools

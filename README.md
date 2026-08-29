@@ -56,6 +56,22 @@ The manual installer will:
 4. Install the `fastmcp` Python package
 5. Trigger the macOS calendar permission prompt
 
+## MCP Protocol
+
+Transport is **Streamable HTTP** on `127.0.0.1:9876/mcp`. The server is never exposed to the
+network, and there is no authorization layer — access control is the loopback bind plus macOS
+TCC on the `cal-tools` binary.
+
+`install.sh` pins **`fastmcp>=3.4.5,<4`**. The upper bound is deliberate. FastMCP 4 is the
+first release to serve MCP revision `2026-07-28` (the sessionless protocol), and it carries
+breaking changes — server-side sampling and roots removed, 3.x compatibility shims dropped,
+SDK field names renamed from camelCase to snake_case. Because this server runs as an
+unattended LaunchAgent, an unpinned dependency would land a major version on users during a
+routine reinstall. The pin will be lifted deliberately once FastMCP 4 is stable.
+
+Nothing here uses a feature deprecated by `2026-07-28`: no Roots, no Sampling, no MCP Logging
+(the LaunchAgent logs to stderr), and no HTTP+SSE transport.
+
 ## Agent Configuration
 
 Once running, add to your agent's MCP config:
@@ -99,6 +115,39 @@ extensions:
 ```
 
 ## Available Tools
+
+Every tool carries MCP annotations. The eleven read-only tools are marked `readOnlyHint`, so
+clients can skip confirmation prompts on them; `update_event` and `delete_event` are marked
+`destructiveHint`. Note that `delete_event` defaults to `span="all"`, which removes *every*
+occurrence of a recurring event.
+
+### `get_calendar_change_token`
+
+Check whether the calendar has changed without refetching events.
+
+A background watcher observes macOS for calendar changes — a remote account syncing, an edit
+in Calendar.app, another process writing — and increments a `revision` counter. Cache that
+counter alongside event results and re-read it before trusting them: if `revision` hasn't
+moved, previously fetched events are still current.
+
+```json
+{"watching": true, "revision": 3, "last_changed_at": "2026-07-29T10:14:02-07:00", "error": null}
+```
+
+If `watching` is `false`, the watcher isn't running, `revision` is not a reliable staleness
+signal, and `error` explains why. Set `CALENDAR_MCP_WATCH=0` to disable the watcher entirely.
+
+The same state is exposed as the `calendar://changes` resource.
+
+> **Why polling?** MCP `2026-07-28` replaces `resources/subscribe` with `subscriptions/listen`
+> for server-pushed change notifications, which is the natural fit here. It needs FastMCP 4 —
+> and the MCP Python SDK currently hardcodes `subscribe=False` in its resource capabilities, so
+> FastMCP 3.x cannot serve resource subscriptions at all. The watcher and its state are already
+> in place; converting this to a push is a small change once the pin lifts.
+
+*No parameters.*
+
+---
 
 ### `list_calendars`
 

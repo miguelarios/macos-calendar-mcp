@@ -28,6 +28,20 @@ func exitError(_ code: String, _ message: String) -> Never {
     exit(1)
 }
 
+/// Emit one newline-delimited JSON record on stdout without exiting.
+///
+/// Used by `watch`, which is the only long-running subcommand. Writes straight to the
+/// file handle because stdout is block-buffered when piped, and a watcher whose events
+/// sit in a buffer until the process ends is useless to its parent.
+func emitLine(_ payload: [String: Any]) {
+    guard
+        let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+        var line = String(data: data, encoding: .utf8)
+    else { return }
+    line += "\n"
+    FileHandle.standardOutput.write(line.data(using: .utf8)!)
+}
+
 // MARK: - Date Formatting
 
 let isoFormatter: ISO8601DateFormatter = {
@@ -732,6 +746,63 @@ func cmdCalendars(store: EKEventStore) {
     exitSuccess(["calendars": serialized])
 }
 
+/// Long-running observer for external calendar changes.
+///
+/// EventKit posts `.EKEventStoreChanged` whenever the underlying database changes — a sync
+/// from a remote account, an edit in Calendar.app, or a write from another process. The
+/// notification carries no payload: it only says "something changed, your cached objects are
+/// stale". So we emit a bare change record and leave it to the caller to decide what to refetch.
+///
+/// Unlike every other subcommand this one does not exit; it emits NDJSON until killed. The
+/// caller is `calendar_mcp_server.py`, which turns these records into a change token.
+/// Mutable watcher state, boxed in a reference type so the notification closure and its
+/// debounced work items share one instance. Every access happens on `debounceQueue`.
+final class WatchState {
+    var revision = 0
+    var pending: DispatchWorkItem?
+}
+
+/// Held for the process lifetime so the observer registration outlives `cmdWatch`.
+var watchObserverToken: NSObjectProtocol?
+
+func cmdWatch(store: EKEventStore) {
+    // EventKit coalesces poorly — a single sync can post several notifications in a burst.
+    // Debounce so a burst becomes one record rather than five.
+    let debounceQueue = DispatchQueue(label: "com.local.calendar-mcp.watch")
+    let state = WatchState()
+
+    watchObserverToken = NotificationCenter.default.addObserver(
+        forName: .EKEventStoreChanged,
+        object: store,
+        queue: nil
+    ) { _ in
+        debounceQueue.async {
+            state.pending?.cancel()
+            let work = DispatchWorkItem {
+                // Reset the in-process cache so the store stops vending objects that were
+                // already stale when the notification fired.
+                store.reset()
+                state.revision += 1
+                emitLine([
+                    "type": "changed",
+                    "revision": state.revision,
+                    "at": outputFormatter.string(from: Date()),
+                ])
+            }
+            state.pending = work
+            debounceQueue.asyncAfter(deadline: .now() + 1.0, execute: work)
+        }
+    }
+
+    // Handshake record: lets the caller distinguish "watching, nothing has changed yet" from
+    // "the watcher never started".
+    emitLine([
+        "type": "watching",
+        "revision": state.revision,
+        "at": outputFormatter.string(from: Date()),
+    ])
+}
+
 func cmdEvents(store: EKEventStore, args: Args) {
     var startDate: Date
     var endDate: Date
@@ -1099,8 +1170,12 @@ let semaphore = DispatchSemaphore(value: 0)
 let parsedArgs = Args()
 
 guard let subcommand = parsedArgs.subcommand else {
-    exitError("validation_error", "Usage: cal-tools <calendars|events|event|create|update|delete|search|availability> [options]")
+    exitError("validation_error", "Usage: cal-tools <calendars|events|event|create|update|delete|search|availability|watch> [options]")
 }
+
+// `watch` never completes: it observes EventKit and streams NDJSON until killed. Every other
+// subcommand exits from inside its command function.
+let isLongRunning = subcommand == "watch"
 
 let requestAccess: (@escaping (Bool, Error?) -> Void) -> Void = { completion in
     if #available(macOS 14.0, *) {
@@ -1115,7 +1190,9 @@ requestAccess { granted, error in
 
     guard granted else {
         let msg = error?.localizedDescription ?? "unknown error"
-        exitError("backend_error", "Calendar access denied (\(msg)). Grant permission in System Settings > Privacy & Security > Calendars.")
+        // Distinct from backend_error on purpose: this is the one failure the user can fix
+        // themselves, and callers need to branch on it without parsing the message text.
+        exitError("permission_denied", "Calendar access denied (\(msg)). Grant permission in System Settings > Privacy & Security > Calendars.")
     }
 
     switch subcommand {
@@ -1135,9 +1212,17 @@ requestAccess { granted, error in
         cmdSearch(store: store, args: parsedArgs)
     case "availability":
         cmdAvailability(store: store, args: parsedArgs)
+    case "watch":
+        cmdWatch(store: store)
     default:
-        exitError("validation_error", "Unknown command: \(subcommand). Use: calendars, events, event, create, update, delete, search, availability")
+        exitError("validation_error", "Unknown command: \(subcommand). Use: calendars, events, event, create, update, delete, search, availability, watch")
     }
 }
 
 _ = semaphore.wait(timeout: .distantFuture)
+
+// cmdWatch only registers an observer; the notifications it waits on need a live run loop,
+// and it has to run on the main thread rather than the access-request callback thread.
+if isLongRunning {
+    RunLoop.main.run()
+}
